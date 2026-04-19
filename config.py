@@ -3,7 +3,7 @@ Global configuration: scoring weights, decision thresholds, Claude model, concur
 """
 
 # ── Claude ──────────────────────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-opus-4-7"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 # ── Scoring weights (must sum to 100) ───────────────────────────────────────
 # Calibrated against Antti (Head of SDR) meeting — 2026-04-17
