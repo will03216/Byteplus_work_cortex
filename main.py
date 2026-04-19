@@ -1,0 +1,271 @@
+"""
+Lead Qualification Engine — CLI entrypoint.
+
+Usage:
+    python main.py --input leads.json   --output-dir ./output [--concurrency 10] [--verbose]
+    python main.py --input leads.csv    --output-dir ./output [--concurrency 10] [--verbose]
+
+Supports both JSON (array of lead objects) and CSV (Trigify export format).
+File type is detected automatically from the file extension.
+
+Pipeline per lead:
+    raw input → normalize → enrich → Stage 1 (evidence) → Stage 2 (decision) → route → CSV + artifacts
+"""
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import anthropic
+from dotenv import load_dotenv
+
+import config
+from normalization import normalize_batch, LeadInput
+from normalization.csv_loader import load_csv
+from tools import enrich_lead, EnrichedLead
+from claude import extract_evidence, EvidenceOutput, make_decision, DecisionOutput
+from router import route_decision
+from output import write_result, init_output_dir
+
+load_dotenv()
+
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+
+def setup_logging(verbose: bool, output_dir: str) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    log_path = Path(output_dir) / "run.log"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    handlers: list[logging.Handler] = [
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(log_path, encoding="utf-8"),
+    ]
+    logging.basicConfig(
+        level   = level,
+        format  = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        handlers= handlers,
+    )
+
+
+# ── Run statistics ────────────────────────────────────────────────────────────
+
+@dataclass
+class RunStats:
+    total:         int = 0
+    qualified:     int = 0
+    disqualified:  int = 0
+    review:        int = 0
+    errors:        int = 0
+    error_ids:     list[str] = field(default_factory=list)
+
+    def record(self, routing: str) -> None:
+        self.total += 1
+        if routing == "qualified":
+            self.qualified += 1
+        elif routing == "disqualified":
+            self.disqualified += 1
+        else:
+            self.review += 1
+
+    def record_error(self, lead_id: str) -> None:
+        self.total += 1
+        self.errors += 1
+        self.error_ids.append(lead_id)
+
+    def summary(self) -> str:
+        lines = [
+            "─" * 50,
+            f"  Total processed : {self.total}",
+            f"  Qualified        : {self.qualified}",
+            f"  Disqualified     : {self.disqualified}",
+            f"  Review           : {self.review}",
+            f"  Errors           : {self.errors}",
+        ]
+        if self.error_ids:
+            lines.append(f"  Failed lead IDs  : {', '.join(self.error_ids)}")
+        lines.append("─" * 50)
+        return "\n".join(lines)
+
+
+# ── Per-lead pipeline ─────────────────────────────────────────────────────────
+
+async def _run_lead_pipeline(
+    client:     anthropic.AsyncAnthropic,
+    lead:       LeadInput,
+    output_dir: str,
+    stats:      RunStats,
+) -> None:
+    """Inner pipeline steps for a single lead (no semaphore, no timeout — caller owns those)."""
+    logger = logging.getLogger(__name__)
+
+    # Enrichment is already async because it performs concurrent network fetches.
+    enriched: EnrichedLead = await enrich_lead(lead)
+
+    # Stage 1: Evidence extraction
+    evidence: EvidenceOutput = await extract_evidence(client, enriched)
+
+    # Stage 2: Qualification decision
+    decision: DecisionOutput = await make_decision(client, evidence)
+
+    # Routing (pure Python)
+    routing = route_decision(decision, evidence)
+
+    # Override decision field in DecisionOutput to match final routing
+    decision = decision.model_copy(update={"decision": routing})
+
+    # Write outputs
+    await write_result(lead, evidence, decision, routing, output_dir)
+
+    stats.record(routing)
+    logger.info(
+        "✓ lead_id=%-20s | %-12s | score=%3d | %s",
+        lead.lead_id, routing.upper(), decision.score, lead.company_name,
+    )
+
+
+async def process_lead(
+    client:     anthropic.AsyncAnthropic,
+    lead:       LeadInput,
+    output_dir: str,
+    sem:        asyncio.Semaphore,
+    stats:      RunStats,
+) -> None:
+    """Full pipeline for a single lead, bounded by semaphore and per-lead deadline."""
+    logger = logging.getLogger(__name__)
+
+    async with sem:
+        try:
+            await asyncio.wait_for(
+                _run_lead_pipeline(client, lead, output_dir, stats),
+                timeout=config.LEAD_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            stats.record_error(lead.lead_id)
+            logger.error(
+                "✗ lead_id=%s TIMED OUT after %ds",
+                lead.lead_id, config.LEAD_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            stats.record_error(lead.lead_id)
+            logger.error("✗ lead_id=%s FAILED: %s", lead.lead_id, exc, exc_info=True)
+
+
+# ── Main batch runner ─────────────────────────────────────────────────────────
+
+async def run_batch(
+    input_path:  str,
+    output_dir:  str,
+    concurrency: int,
+) -> RunStats:
+    logger = logging.getLogger(__name__)
+
+    # Load leads — auto-detect format from file extension
+    suffix = Path(input_path).suffix.lower()
+    if suffix == ".csv":
+        raw_leads: list[dict] = load_csv(input_path)
+    elif suffix == ".json":
+        with open(input_path, encoding="utf-8") as f:
+            raw_leads = json.load(f)
+    else:
+        raise ValueError(f"Unsupported input format '{suffix}'. Use .json or .csv")
+    logger.info("Loaded %d raw leads from %s", len(raw_leads), input_path)
+
+    # Normalize + deduplicate
+    leads = normalize_batch(raw_leads)
+    logger.info("Normalized %d valid leads (skipped %d)", len(leads), len(raw_leads) - len(leads))
+
+    if not leads:
+        logger.warning("No valid leads to process.")
+        return RunStats()
+
+    # Initialize output directories and CSV headers
+    init_output_dir(output_dir)
+
+    # Shared async Claude client (connection pooling)
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
+
+    stats = RunStats()
+    sem   = asyncio.Semaphore(concurrency)
+
+    async with anthropic.AsyncAnthropic(api_key=api_key) as client:
+        tasks = [
+            process_lead(client, lead, output_dir, sem, stats)
+            for lead in leads
+        ]
+        await asyncio.gather(*tasks, return_exceptions=False)
+
+    return stats
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Claude Brain — Seedance Lead Qualification Engine",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--input", "-i",
+        required=True,
+        help="Path to input JSON file (array of lead objects)",
+    )
+    parser.add_argument(
+        "--output-dir", "-o",
+        default="./output",
+        help="Directory for CSV outputs and artifacts (default: ./output)",
+    )
+    parser.add_argument(
+        "--concurrency", "-c",
+        type=int,
+        default=config.DEFAULT_CONCURRENCY,
+        choices=range(5, 21),
+        metavar="[5-20]",
+        help=f"Number of concurrent leads to process, 5–20 (default: {config.DEFAULT_CONCURRENCY})",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    setup_logging(args.verbose, args.output_dir)
+    logger = logging.getLogger(__name__)
+
+    logger.info("=" * 50)
+    logger.info("Seedance Lead Qualification Engine")
+    logger.info("  Input      : %s", args.input)
+    logger.info("  Output dir : %s", args.output_dir)
+    logger.info("  Concurrency: %d", args.concurrency)
+    logger.info("  Model      : %s", config.CLAUDE_MODEL)
+    logger.info("=" * 50)
+
+    start = time.monotonic()
+
+    stats = asyncio.run(
+        run_batch(
+            input_path  = args.input,
+            output_dir  = args.output_dir,
+            concurrency = args.concurrency,
+        )
+    )
+
+    elapsed = time.monotonic() - start
+    logger.info("Completed in %.1fs", elapsed)
+    print(stats.summary())
+
+
+if __name__ == "__main__":
+    main()
