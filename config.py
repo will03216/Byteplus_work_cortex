@@ -1,9 +1,30 @@
 """
-Global configuration: scoring weights, decision thresholds, Claude model, concurrency settings.
+Global configuration: model settings, scoring weights, decision thresholds,
+and concurrency settings.
 """
 
-# ── Claude ──────────────────────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+import os
+
+
+def _normalize_model_name(raw_model: str) -> str:
+    """
+    Preserve backward compatibility for old Claude-only config values while
+    allowing provider-prefixed LiteLLM model names for any vendor.
+    """
+    if "/" in raw_model:
+        return raw_model
+    if raw_model.startswith("claude"):
+        return f"anthropic/{raw_model}"
+    return raw_model
+
+
+# ── LLM ─────────────────────────────────────────────────────────────────────
+DEFAULT_LLM_MODEL   = "anthropic/claude-haiku-4-5-20251001"
+LLM_PROVIDER        = os.getenv("LLM_PROVIDER") or None
+LLM_MODEL           = _normalize_model_name(os.getenv("LLM_MODEL") or DEFAULT_LLM_MODEL)
+LLM_API_KEY         = os.getenv("LLM_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+LLM_API_BASE        = os.getenv("LLM_API_BASE") or None
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
 # ── Scoring weights (must sum to 100) ───────────────────────────────────────
 # Calibrated against Antti (Head of SDR) meeting — 2026-04-17
@@ -23,8 +44,7 @@ DISQUALIFIED_THRESHOLD = 60   # score <  60 → disqualified  (else → review)
 # ── Concurrency & reliability ────────────────────────────────────────────────
 DEFAULT_CONCURRENCY    = 10
 MAX_RETRIES            = 2
-CLAUDE_TIMEOUT_SECONDS = 30   # per individual Claude API call
-LEAD_TIMEOUT_SECONDS   = 90   # entire per-lead pipeline deadline (enrich + stage1 + stage2 + retries)
+LEAD_TIMEOUT_SECONDS = 90   # entire per-lead pipeline deadline (enrich + stage1 + stage2 + retries)
 
 # ── Output paths (relative to --output-dir) ──────────────────────────────────
 QUALIFIED_CSV    = "qualified_leads.csv"

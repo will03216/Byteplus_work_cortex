@@ -6,7 +6,15 @@
       "Bash(python3 -m py_compile main.py config.py normalization/normalizer.py tools/enrichment.py claude/prompts.py claude/stage1_evidence.py claude/stage2_decision.py router/decision_router.py output/csv_writer.py)",
       "Bash(ls /Users/bytedance/Documents/lead_generation_engine/*.csv)",
       "Bash(python3 -m py_compile main.py normalization/csv_loader.py)",
-      "Bash(ls \"/Users/bytedance/Documents/lead_generation_engine/\"*leads*)"
+      "Bash(ls \"/Users/bytedance/Documents/lead_generation_engine/\"*leads*)",
+      "Bash(pip install *)",
+      "Bash(python3 -c \"import streamlit; import plotly; print\\('OK'\\)\")",
+      "Bash(python3 -m streamlit run ui/app.py --server.headless false)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501)",
+      "Bash(pkill -f \"streamlit run\")",
+      "Bash(pkill -f \"server.py\")",
+      "Bash(python3 /Users/bytedance/Documents/GitHub/lead-generation-engine-v1/ui/server.py)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080)"
     ]
   }
 }

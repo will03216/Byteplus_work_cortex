@@ -1,6 +1,6 @@
 # Claude Brain For Lead Generation
 
-This repository contains the current working prototype of the Seedance lead generation engine: a Claude-powered qualification and prioritization pipeline designed to turn noisy outbound signals into a ranked, auditable lead list.
+This repository contains the current working prototype of the Seedance lead generation engine: an LLM-powered qualification and prioritization pipeline designed to turn noisy outbound signals into a ranked, auditable lead list.
 
 The long-term vision is bigger than lead scoring. The goal is to build a reusable "Claude brain" for outbound: a context-aware system that understands Seedance's ICP, product, sales messaging, target personas, buying signals, and outreach style, then helps SDRs and AEs decide who to target and how to engage them.
 
@@ -8,7 +8,7 @@ Today, the repo implements the first practical layer of that vision:
 
 - ingest lead data from JSON or Trigify-style CSV exports
 - normalize and lightly enrich each lead
-- run a two-stage Claude qualification workflow
+- run a two-stage LLM qualification workflow
 - apply deterministic Python routing
 - output CSV queues plus JSON artifacts for review and audit
 
@@ -462,11 +462,33 @@ pip install -r requirements.txt
 
 ### Configure
 
+Copy `.env.example` to `.env`, then choose the model/provider you want:
+
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env
 ```
 
-Or put the same key in a local `.env` file.
+Example `.env` for Claude:
+
+```dotenv
+LLM_MODEL=anthropic/claude-haiku-4-5-20251001
+LLM_API_KEY=sk-ant-...
+LLM_PROVIDER=
+LLM_API_BASE=
+LLM_TIMEOUT_SECONDS=30
+```
+
+Example `.env` for BytePlus ModelArk / Dola Seed 2.0 Pro:
+
+```dotenv
+LLM_MODEL=seed-2-0-pro-260328
+LLM_API_KEY=your-ark-api-key
+LLM_PROVIDER=openai
+LLM_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3
+LLM_TIMEOUT_SECONDS=30
+```
+
+The app reads these values at startup, so switching providers is a `.env` change instead of a code change.
 
 ### Run With A CSV Export
 

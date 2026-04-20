@@ -178,8 +178,7 @@ Return ONLY this JSON object. Nothing else."""
 
 def build_stage1_messages(lead_data: dict, enrichment_data: dict) -> list[dict[str, Any]]:
     """
-    Build the messages array for Stage 1 Claude call.
-    System prompt uses cache_control for cost efficiency on large batches.
+    Build the messages array for Stage 1 LLM call.
     """
     user_content = json.dumps({
         "lead": lead_data,
@@ -194,20 +193,14 @@ def build_stage1_messages(lead_data: dict, enrichment_data: dict) -> list[dict[s
     ]
 
 
-def build_stage1_system() -> list[dict[str, Any]]:
-    """System prompt block with prompt caching enabled."""
-    return [
-        {
-            "type": "text",
-            "text": STAGE1_SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
+def build_stage1_system() -> str:
+    """Return the Stage 1 system prompt as plain text."""
+    return STAGE1_SYSTEM_PROMPT
 
 
 def build_stage2_messages(evidence_data: dict) -> list[dict[str, Any]]:
     """
-    Build the messages array for Stage 2 Claude call.
+    Build the messages array for Stage 2 LLM call.
     Input is ONLY the Stage 1 evidence output — no raw lead data.
     """
     return [
@@ -218,12 +211,6 @@ def build_stage2_messages(evidence_data: dict) -> list[dict[str, Any]]:
     ]
 
 
-def build_stage2_system() -> list[dict[str, Any]]:
-    """System prompt block with prompt caching enabled."""
-    return [
-        {
-            "type": "text",
-            "text": STAGE2_SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
+def build_stage2_system() -> str:
+    """Return the Stage 2 system prompt as plain text."""
+    return STAGE2_SYSTEM_PROMPT

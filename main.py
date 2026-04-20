@@ -16,24 +16,23 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import anthropic
 from dotenv import load_dotenv
 
+load_dotenv()
+
 import config
+from llm import LiteLLMClient
 from normalization import normalize_batch, LeadInput
 from normalization.csv_loader import load_csv
 from tools import enrich_lead, EnrichedLead
 from claude import extract_evidence, EvidenceOutput, make_decision, DecisionOutput
 from router import route_decision
 from output import write_result, init_output_dir
-
-load_dotenv()
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -97,7 +96,7 @@ class RunStats:
 # ── Per-lead pipeline ─────────────────────────────────────────────────────────
 
 async def _run_lead_pipeline(
-    client:     anthropic.AsyncAnthropic,
+    client:     LiteLLMClient,
     lead:       LeadInput,
     output_dir: str,
     stats:      RunStats,
@@ -131,7 +130,7 @@ async def _run_lead_pipeline(
 
 
 async def process_lead(
-    client:     anthropic.AsyncAnthropic,
+    client:     LiteLLMClient,
     lead:       LeadInput,
     output_dir: str,
     sem:        asyncio.Semaphore,
@@ -188,20 +187,27 @@ async def run_batch(
     # Initialize output directories and CSV headers
     init_output_dir(output_dir)
 
-    # Shared async Claude client (connection pooling)
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
+    # Shared LiteLLM client. Model/provider selection comes from .env.
+    if not config.LLM_API_KEY:
+        raise RuntimeError("LLM_API_KEY environment variable is not set")
+    if not config.LLM_MODEL:
+        raise RuntimeError("LLM_MODEL environment variable is not set")
 
     stats = RunStats()
     sem   = asyncio.Semaphore(concurrency)
+    client = LiteLLMClient(
+        model           = config.LLM_MODEL,
+        api_key         = config.LLM_API_KEY,
+        provider        = config.LLM_PROVIDER,
+        api_base        = config.LLM_API_BASE,
+        timeout_seconds = config.LLM_TIMEOUT_SECONDS,
+    )
 
-    async with anthropic.AsyncAnthropic(api_key=api_key) as client:
-        tasks = [
-            process_lead(client, lead, output_dir, sem, stats)
-            for lead in leads
-        ]
-        await asyncio.gather(*tasks, return_exceptions=False)
+    tasks = [
+        process_lead(client, lead, output_dir, sem, stats)
+        for lead in leads
+    ]
+    await asyncio.gather(*tasks, return_exceptions=False)
 
     return stats
 
@@ -210,7 +216,7 @@ async def run_batch(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Claude Brain — Seedance Lead Qualification Engine",
+        description="Lead Qualification Engine — Seedance",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -249,7 +255,8 @@ def main() -> None:
     logger.info("  Input      : %s", args.input)
     logger.info("  Output dir : %s", args.output_dir)
     logger.info("  Concurrency: %d", args.concurrency)
-    logger.info("  Model      : %s", config.CLAUDE_MODEL)
+    logger.info("  Provider   : %s", config.LLM_PROVIDER or "auto")
+    logger.info("  Model      : %s", config.LLM_MODEL)
     logger.info("=" * 50)
 
     start = time.monotonic()

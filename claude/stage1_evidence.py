@@ -1,5 +1,5 @@
 """
-Claude Stage 1: Evidence Extraction.
+LLM Stage 1: Evidence Extraction.
 
 Takes a normalized + enriched lead and returns structured EvidenceOutput.
 Retries up to MAX_RETRIES times on parse or API failure.
@@ -9,12 +9,12 @@ import json
 import logging
 from typing import Literal, Any
 
-import anthropic
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 import config
 from claude.prompts import build_stage1_system, build_stage1_messages
+from llm import LiteLLMClient, LLMError
 from tools.enrichment import EnrichedLead
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def _normalize_hard_disqualifiers(data: dict, lead_id: str) -> dict:
     """
     Only confirmed negatives should remain in hard_disqualifiers.
 
-    Claude sometimes puts tentative language like "potential competitor" or
+    The model sometimes puts tentative language like "potential competitor" or
     "needs review" into the hard_disqualifiers field. That breaks the contract
     for downstream routing, because any non-empty hard_disqualifiers list
     becomes an automatic disqualification in Python.
@@ -82,9 +82,9 @@ def _normalize_hard_disqualifiers(data: dict, lead_id: str) -> dict:
     return data
 
 def _parse_response(raw: str, lead_id: str) -> EvidenceOutput:
-    """Parse Claude's raw text response into EvidenceOutput."""
+    """Parse the raw text response into EvidenceOutput."""
     text = raw.strip()
-    # Strip markdown fences if Claude wraps in ```json ... ```
+    # Strip markdown fences if the provider wraps JSON in ```json ... ```
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
@@ -118,18 +118,18 @@ def _build_enrichment_dict(enriched: EnrichedLead) -> dict[str, Any]:
 @retry(
     stop=stop_after_attempt(config.MAX_RETRIES + 1),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((ValueError, anthropic.APIError)),
+    retry=retry_if_exception_type((ValueError, LLMError)),
     reraise=True,
 )
 async def extract_evidence(
-    client:   anthropic.AsyncAnthropic,
+    client:   LiteLLMClient,
     enriched: EnrichedLead,
 ) -> EvidenceOutput:
     """
-    Call Claude Stage 1 to extract structured evidence from a lead.
+    Call the configured LLM for Stage 1 evidence extraction.
 
     Args:
-        client:   AsyncAnthropic client instance (shared across batch)
+        client:   Shared LiteLLM client instance
         enriched: Enriched lead (normalized lead + tool enrichment data)
 
     Returns:
@@ -148,15 +148,11 @@ async def extract_evidence(
         json.dumps({"lead": lead_dict, "enrichment": enrichment_dict}, ensure_ascii=False),
     )
 
-    response = await client.messages.create(
-        model    = config.CLAUDE_MODEL,
-        max_tokens = 1024,
-        system   = build_stage1_system(),
-        messages = build_stage1_messages(lead_dict, enrichment_dict),
-        timeout  = config.CLAUDE_TIMEOUT_SECONDS,
+    raw_text = await client.generate(
+        system_prompt = build_stage1_system(),
+        messages      = build_stage1_messages(lead_dict, enrichment_dict),
+        max_tokens    = 1024,
     )
-
-    raw_text = response.content[0].text
     logger.debug("Stage 1 raw response for lead_id=%s: %s", lead_id, raw_text[:300])
 
     evidence = _parse_response(raw_text, lead_id)
