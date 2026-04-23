@@ -106,6 +106,7 @@ def load_csv(file_path: str) -> list[dict]:
                 "title":            row.get("JOB TITLE", "").strip(),
                 "company_name":     company,
                 "company_domain":   row.get("COMPANY URL", "").strip(),
+                "company_size":     row.get("COMPANY SIZE", "").strip() or None,
                 "linkedin_url":     row.get("LINKEDIN PROFILE", "").strip() or None,
                 "signal_text":      _build_signal_text(row),
                 "signal_type":      signal_type,

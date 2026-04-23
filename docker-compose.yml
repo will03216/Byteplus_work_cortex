@@ -1,0 +1,40 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/seedance
+      LLM_API_KEY:  ${LLM_API_KEY}
+      LLM_MODEL:    ${LLM_MODEL:-anthropic/claude-haiku-4-5-20251001}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+    volumes:
+      # Temp run files survive app restarts; DB is the source of truth
+      - run_data:/app/output/runs
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       seedance
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # expose for local psql / DBeaver access
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seedance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  run_data:

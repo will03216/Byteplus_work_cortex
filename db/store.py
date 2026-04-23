@@ -1,0 +1,247 @@
+"""
+PostgreSQL persistence layer.
+Uses asyncpg with a connection pool. JSONB columns are auto-serialised via
+a per-connection codec registered in create_pool().
+"""
+
+import json
+from typing import Optional
+
+import asyncpg
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS runs (
+    run_id       TEXT         PRIMARY KEY,
+    filename     TEXT         NOT NULL,
+    concurrency  INT          NOT NULL,
+    status       TEXT         NOT NULL DEFAULT 'running',
+    returncode   INT,
+    lead_count   INT          NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS leads (
+    id              SERIAL  PRIMARY KEY,
+    run_id          TEXT    NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    lead_id         TEXT    NOT NULL,
+    person_name     TEXT,
+    company         TEXT,
+    company_size    TEXT,
+    linkedin_url    TEXT,
+    company_website TEXT,
+    title           TEXT,
+    signal_type     TEXT,
+    source_url      TEXT,
+    decision        TEXT    NOT NULL,
+    score           INT     NOT NULL DEFAULT 0,
+    confidence      TEXT,
+    segment_fit     INT     NOT NULL DEFAULT 0,
+    buyer_fit       INT     NOT NULL DEFAULT 0,
+    pain_fit        INT     NOT NULL DEFAULT 0,
+    workflow_fit    INT     NOT NULL DEFAULT 0,
+    commercial_fit  INT     NOT NULL DEFAULT 0,
+    reasoning       TEXT,
+    use_case        TEXT,
+    signal_strength TEXT,
+    evidence        JSONB   NOT NULL DEFAULT '{}',
+    qual_reasons    JSONB   NOT NULL DEFAULT '[]',
+    disqual_reasons JSONB   NOT NULL DEFAULT '[]',
+    UNIQUE (run_id, lead_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_run     ON leads(run_id);
+CREATE INDEX IF NOT EXISTS idx_leads_run_dec ON leads(run_id, decision);
+"""
+
+
+# ── Pool ──────────────────────────────────────────────────────────────────────
+
+async def create_pool(database_url: str) -> asyncpg.Pool:
+    async def _init(conn: asyncpg.Connection) -> None:
+        await conn.set_type_codec(
+            "jsonb",
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
+    return await asyncpg.create_pool(database_url, init=_init, min_size=2, max_size=10)
+
+
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+async def create_tables(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(_DDL)
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_size TEXT")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS linkedin_url TEXT")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_website TEXT")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS signal_type TEXT")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_url TEXT")
+
+
+async def mark_stale_runs(pool: asyncpg.Pool) -> None:
+    """Runs that were 'running' when the server last stopped never completed."""
+    await pool.execute("UPDATE runs SET status='error' WHERE status='running'")
+
+
+# ── Runs ──────────────────────────────────────────────────────────────────────
+
+async def insert_run(
+    pool: asyncpg.Pool, run_id: str, filename: str, concurrency: int
+) -> None:
+    await pool.execute(
+        "INSERT INTO runs (run_id, filename, concurrency) VALUES ($1, $2, $3)",
+        run_id, filename, concurrency,
+    )
+
+
+async def update_run(
+    pool: asyncpg.Pool,
+    run_id: str,
+    status: str,
+    returncode: Optional[int] = None,
+    lead_count: int = 0,
+) -> None:
+    if status in ("done", "error"):
+        await pool.execute(
+            """UPDATE runs
+                  SET status=$1, returncode=$2, lead_count=$3, completed_at=now()
+                WHERE run_id=$4""",
+            status, returncode, lead_count, run_id,
+        )
+    else:
+        await pool.execute(
+            "UPDATE runs SET status=$1 WHERE run_id=$2", status, run_id
+        )
+
+
+async def list_runs(pool: asyncpg.Pool) -> list:
+    rows = await pool.fetch(
+        """
+        SELECT r.run_id, r.filename, r.status, r.lead_count,
+               r.created_at, r.completed_at,
+               COUNT(l.id) AS n_total,
+               COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
+               COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
+               COUNT(CASE WHEN l.decision='disqualified' THEN 1 END) AS n_disqualified
+          FROM runs r
+          LEFT JOIN leads l ON l.run_id = r.run_id
+         GROUP BY r.run_id
+         ORDER BY r.created_at DESC
+        """,
+    )
+    return [
+        {
+            "run_id":         r["run_id"],
+            "filename":       r["filename"],
+            "status":         r["status"],
+            "lead_count":     max(r["lead_count"] or 0, r["n_total"] or 0),
+            "n_qualified":    r["n_qualified"],
+            "n_review":       r["n_review"],
+            "n_disqualified": r["n_disqualified"],
+            "created_at":     r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+
+
+async def delete_run(pool: asyncpg.Pool, run_id: str) -> None:
+    await pool.execute("DELETE FROM runs WHERE run_id=$1", run_id)
+
+
+# ── Leads ─────────────────────────────────────────────────────────────────────
+
+async def upsert_lead(pool: asyncpg.Pool, run_id: str, lead: dict) -> None:
+    evidence = {
+        "observed":          lead.get("observed", []),
+        "inferred":          lead.get("inferred", []),
+        "unknowns":          lead.get("unknowns", []),
+        "hard_disqualifiers": lead.get("hard_disqualifiers", []),
+    }
+    await pool.execute(
+        """
+        INSERT INTO leads (
+            run_id, lead_id, person_name, company, company_size, linkedin_url, company_website, title,
+            signal_type, source_url, decision, score, confidence,
+            segment_fit, buyer_fit, pain_fit, workflow_fit, commercial_fit,
+            reasoning, use_case, signal_strength,
+            evidence, qual_reasons, disqual_reasons
+        ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+        )
+        ON CONFLICT (run_id, lead_id) DO UPDATE SET
+            company_size=$5, linkedin_url=$6, company_website=$7, signal_type=$9, source_url=$10,
+            decision=$11, score=$12, confidence=$13,
+            segment_fit=$14, buyer_fit=$15, pain_fit=$16,
+            workflow_fit=$17, commercial_fit=$18,
+            reasoning=$19, use_case=$20, signal_strength=$21,
+            evidence=$22, qual_reasons=$23, disqual_reasons=$24
+        """,
+        run_id,
+        lead.get("lead_id", lead.get("name", "")),
+        lead.get("name", ""),
+        lead.get("company", ""),
+        lead.get("company_size", ""),
+        lead.get("linkedin_url", ""),
+        lead.get("company_website", ""),
+        lead.get("role", ""),
+        lead.get("signal_type", ""),
+        lead.get("source_url", ""),
+        lead["decision"],
+        lead["score"],
+        lead.get("conf", ""),
+        lead.get("segment", 0),
+        lead.get("buyer", 0),
+        lead.get("pain", 0),
+        lead.get("workflow", 0),
+        lead.get("commercial", 0),
+        lead.get("reasoning", ""),
+        lead.get("usecase", ""),
+        lead.get("signal_strength", ""),
+        evidence,
+        lead.get("reasons", []),
+        lead.get("disreasons", []),
+    )
+
+
+async def get_leads(pool: asyncpg.Pool, run_id: str) -> list:
+    rows = await pool.fetch(
+        "SELECT * FROM leads WHERE run_id=$1 ORDER BY score DESC", run_id
+    )
+    return [_row_to_lead(r) for r in rows]
+
+
+def _row_to_lead(row: asyncpg.Record) -> dict:
+    ev = row["evidence"] or {}
+    return {
+        "lead_id":        row["lead_id"],
+        "name":           row["person_name"] or "",
+        "company":        row["company"] or "",
+        "company_size":   row["company_size"] or "",
+        "linkedin_url":   row["linkedin_url"] or "",
+        "company_website": row["company_website"] or "",
+        "role":           row["title"] or "",
+        "signal_type":    row["signal_type"] or "",
+        "source_url":     row["source_url"] or "",
+        "decision":       row["decision"],
+        "score":          row["score"],
+        "conf":           row["confidence"] or "",
+        "segment":        row["segment_fit"],
+        "buyer":          row["buyer_fit"],
+        "pain":           row["pain_fit"],
+        "workflow":       row["workflow_fit"],
+        "commercial":     row["commercial_fit"],
+        "reasoning":      row["reasoning"] or "",
+        "usecase":        row["use_case"] or "",
+        "signal_strength": row["signal_strength"] or "",
+        "observed":       ev.get("observed", []),
+        "inferred":       ev.get("inferred", []),
+        "unknowns":       ev.get("unknowns", []),
+        "hard_disqualifiers": ev.get("hard_disqualifiers", []),
+        "reasons":        row["qual_reasons"] or [],
+        "disreasons":     row["disqual_reasons"] or [],
+    }

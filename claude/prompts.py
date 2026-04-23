@@ -142,9 +142,9 @@ This factor reflects BOTH signal engagement quality AND whether a relevant workf
 Add 1–2 pts if company momentum signal present: hiring AI/video roles, new leadership, funding, expansion.
 
 ## Decision Rules (Python enforces these, but you must follow them)
-- score >= 75 → "qualified"
+- score >= 70 → "qualified"
 - score < 60 → "disqualified"
-- 60 <= score < 75 → "review"
+- 60 <= score < 70 → "review"
 - If hard_disqualifiers is non-empty → "disqualified" (override, score irrelevant)
 
 ## Required JSON Output Schema

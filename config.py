@@ -38,7 +38,7 @@ SCORE_WEIGHTS = {
 }
 
 # ── Decision thresholds ──────────────────────────────────────────────────────
-QUALIFIED_THRESHOLD    = 75   # score >= 75 → qualified
+QUALIFIED_THRESHOLD    = 70   # score >= 70 → qualified
 DISQUALIFIED_THRESHOLD = 60   # score <  60 → disqualified  (else → review)
 
 # ── Concurrency & reliability ────────────────────────────────────────────────

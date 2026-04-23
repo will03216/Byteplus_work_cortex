@@ -299,8 +299,8 @@ The router applies the final authoritative rules:
 - otherwise threshold-based routing applies
 
 ```text
-score >= 75        -> qualified
-60 <= score < 75   -> review
+score >= 70        -> qualified
+60 <= score < 70   -> review
 score < 60         -> disqualified
 ```
 
@@ -404,8 +404,8 @@ The current implemented weights in `config.py` are:
 Current thresholds:
 
 ```text
-score >= 75        -> qualified
-60 <= score < 75   -> review
+score >= 70        -> qualified
+60 <= score < 70   -> review
 score < 60         -> disqualified
 ```
 
@@ -452,15 +452,17 @@ If a lead is overqualified, the team can inspect whether the mistake came from:
 
 ---
 
-## 10. Current CLI Usage
+## 10. Run The Project
 
-### Install
+### Local Setup
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Configure
+### Configure Environment
 
 Copy `.env.example` to `.env`, then choose the model/provider you want:
 
@@ -490,28 +492,139 @@ LLM_TIMEOUT_SECONDS=30
 
 The app reads these values at startup, so switching providers is a `.env` change instead of a code change.
 
-### Run With A CSV Export
+### Run The CLI With A CSV Export
 
 ```bash
-python main.py --input "10 gen leads.csv" --output-dir ./output --concurrency 10
+python3 main.py --input "10 gen leads.csv" --output-dir ./output --concurrency 10
 ```
 
-### Run With JSON Input
+### Run The CLI With JSON Input
 
 ```bash
-python main.py --input ./leads.json --output-dir ./output --concurrency 10
+python3 main.py --input ./leads.json --output-dir ./output --concurrency 10
 ```
 
 ### CLI Options
 
 ```text
-python main.py --input <file> [options]
+python3 main.py --input <file> [options]
 
 --input, -i       required input file (.json or .csv)
 --output-dir, -o  output directory for CSVs and artifacts
 --concurrency, -c concurrent lead processing, allowed range 5-20
 --verbose, -v     enable debug logging
 ```
+
+### Run The Web UI Locally
+
+The FastAPI web UI lets you upload CSVs, inspect current and historical runs, and deep-link to a run by `run_id` in the URL.
+
+Without a database:
+
+```bash
+python3 ui/server.py
+```
+
+Open:
+
+- `http://localhost:8080`
+
+With a database:
+
+- Set `DATABASE_URL` before starting the server
+- Results persist across restarts and historical runs stay available in the UI
+
+Example:
+
+```bash
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/seedance
+python3 ui/server.py
+```
+
+### Run Locally With Docker Compose
+
+This is the easiest full local setup if you want both the web app and PostgreSQL.
+
+```bash
+docker compose up --build
+```
+
+Open:
+
+- `http://localhost:8080`
+
+What Docker Compose provides:
+
+- `app` service for the web UI and pipeline runner
+- `db` service using PostgreSQL 16
+- persisted Docker volumes for database state and run files
+
+To stop:
+
+```bash
+docker compose down
+```
+
+To remove volumes too:
+
+```bash
+docker compose down -v
+```
+
+### Deploy In The Cloud
+
+The recommended production shape is:
+
+- one app container running `ui/server.py`
+- one managed PostgreSQL instance
+- environment variables injected by the hosting platform
+
+Required environment variables:
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/seedance
+LLM_MODEL=seed-2-0-pro-260328
+LLM_API_KEY=your-api-key
+LLM_PROVIDER=openai
+LLM_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3
+LLM_TIMEOUT_SECONDS=30
+```
+
+Build the image:
+
+```bash
+docker build -t lead-generation-engine-v1 .
+```
+
+Run the image manually against managed PostgreSQL:
+
+```bash
+docker run -d \
+  --name lead-engine \
+  -p 8080:8080 \
+  -e DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/seedance' \
+  -e LLM_MODEL='seed-2-0-pro-260328' \
+  -e LLM_API_KEY='your-api-key' \
+  -e LLM_PROVIDER='openai' \
+  -e LLM_API_BASE='https://ark.ap-southeast.bytepluses.com/api/v3' \
+  -e LLM_TIMEOUT_SECONDS='30' \
+  lead-generation-engine-v1
+```
+
+Suitable cloud targets include:
+
+- AWS ECS or Fargate with RDS PostgreSQL
+- GCP Cloud Run with Cloud SQL PostgreSQL
+- Render, Railway, or Fly.io with managed PostgreSQL
+- a VM with Docker plus managed PostgreSQL
+
+Cloud deployment checklist:
+
+- provision PostgreSQL and set `DATABASE_URL`
+- store API keys in the platform secret manager
+- expose port `8080`
+- verify `GET /api/runs` after deployment
+- upload a sample CSV and confirm runs persist after container restart
 
 ---
 

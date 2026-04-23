@@ -34,6 +34,7 @@ class LeadInput(BaseModel):
     title:             str
     company_name:      str
     company_domain:    str
+    company_size:      Optional[str] = None
     linkedin_url:      Optional[str] = None
     signal_text:       str
     signal_type:       str
@@ -53,6 +54,14 @@ class LeadInput(BaseModel):
     @classmethod
     def _strip(cls, v: str) -> str:
         return str(v).strip()
+
+    @field_validator("company_size", mode="before")
+    @classmethod
+    def _clean_company_size(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip()
+        return v or None
 
     @field_validator("title", mode="before")
     @classmethod

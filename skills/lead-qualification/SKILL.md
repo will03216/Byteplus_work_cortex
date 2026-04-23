@@ -80,9 +80,9 @@ Scoring rubric and decision rules for qualifying leads for Seedance (ByteDance A
 ## Decision Thresholds
 
 ```
-score >= 75  →  QUALIFIED
+score >= 70  →  QUALIFIED
 score < 60   →  DISQUALIFIED
-60 ≤ score < 75  →  REVIEW
+60 ≤ score < 70  →  REVIEW
 ```
 
 Hard disqualifiers (stage 1 flags) ALWAYS override score → DISQUALIFIED.

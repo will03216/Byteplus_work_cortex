@@ -154,7 +154,7 @@ with st.sidebar:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def score_color(score: float) -> str:
-    if score >= 75:
+    if score >= 70:
         return COLORS["qualified"]
     if score >= 60:
         return COLORS["review"]
@@ -215,7 +215,7 @@ if page == "Dashboard":
             color_discrete_map=DECISION_COLOR_MAP,
             labels={"score": "Score", "count": "Leads"},
         )
-        fig_hist.add_vline(x=75, line_dash="dash", line_color="#22c55e", annotation_text="Qualified ≥75")
+        fig_hist.add_vline(x=70, line_dash="dash", line_color="#22c55e", annotation_text="Qualified ≥70")
         fig_hist.add_vline(x=60, line_dash="dash", line_color="#f59e0b", annotation_text="Review ≥60")
         fig_hist.update_layout(
             paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
