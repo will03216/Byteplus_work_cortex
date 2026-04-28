@@ -43,10 +43,14 @@ _jobs: dict = {}
 # ── DB pool (set in lifespan) ─────────────────────────────────────────────────
 _pool = None
 
-DATABASE_URL   = os.getenv("DATABASE_URL", "")
-APP_USERNAME   = os.getenv("APP_USERNAME", "admin")
-APP_PASSWORD   = os.getenv("APP_PASSWORD", "changeme")
-SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+DATABASE_URL              = os.getenv("DATABASE_URL", "")
+APP_USERNAME              = os.getenv("APP_USERNAME", "admin")
+APP_PASSWORD              = os.getenv("APP_PASSWORD", "changeme")
+SESSION_SECRET            = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+INSTANTLY_API_KEY         = os.getenv("INSTANTLY_API_KEY", "")
+INSTANTLY_CAMPAIGN_ID     = os.getenv("INSTANTLY_CAMPAIGN_ID", "")
+INSTANTLY_SCORE_THRESHOLD = int(os.getenv("INSTANTLY_SCORE_THRESHOLD", "75"))
+PLACEHOLDER_EMAIL         = os.getenv("PLACEHOLDER_EMAIL", "mittulmadaan91@gmail.com")
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -168,6 +172,54 @@ def _summarize_run_dir(run_dir: Path) -> dict:
         "n_disqualified": counts["disqualified"],
         "created_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
     }
+
+
+# ── Email helpers ─────────────────────────────────────────────────────────────
+
+def _build_email(lead: dict) -> dict:
+    first_name = (lead.get("name") or "there").split()[0]
+    company    = lead.get("company") or "your company"
+
+    subject = f"Seedance 2.0 + {company}?"
+    body = f"""Hi {first_name},
+
+Saw {company} is pushing deeper into AI-powered design and video workflows — like the direction you're taking on the creative side.
+
+Looks like an interesting moment too: Veed, Krea, and Pollo have all started layering in ByteDance video models for tighter control and consistency across generations.
+
+Might be relevant for {company} — Seedance 2.0 was built around prompt controllability and visual consistency across shots, two things designers and agencies feel most acutely.
+
+Worth a quick 15–20 min chat?
+
+Best,
+Antti"""
+    return {"subject": subject, "body": body}
+
+
+async def _send_to_instantly(leads: list) -> dict:
+    payload = {
+        "api_key":               INSTANTLY_API_KEY,
+        "campaign_id":           INSTANTLY_CAMPAIGN_ID,
+        "skip_if_in_workspace":  True,
+        "leads": [
+            {
+                "email":         lead.get("email") or PLACEHOLDER_EMAIL,
+                "first_name":    (lead.get("name") or "").split()[0],
+                "last_name":     " ".join((lead.get("name") or "").split()[1:]),
+                "company_name":  lead.get("company") or "",
+                "website":       lead.get("company_website") or "",
+                "personalization": _build_email(lead)["body"],
+            }
+            for lead in leads
+        ],
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.instantly.ai/api/v1/lead/add",
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -334,6 +386,57 @@ async def delete_run(request: Request, run_id: str):
         shutil.rmtree(run_dir, ignore_errors=True)
     _jobs.pop(run_id, None)
     return JSONResponse({"ok": True})
+
+
+@app.get("/api/runs/{run_id}/email-preview")
+async def email_preview(request: Request, run_id: str):
+    _require_auth(request)
+    if _pool:
+        leads = await store.get_leads(_pool, run_id)
+    else:
+        leads = _read_run_files(RUNS_DIR / run_id)
+    previews = [
+        {
+            **_build_email(l),
+            "lead_id":    l["lead_id"],
+            "name":       l["name"],
+            "company":    l["company"],
+            "score":      l["score"],
+            "decision":   l["decision"],
+            "is_manual":  l["score"] > INSTANTLY_SCORE_THRESHOLD,
+            "email_sent": l.get("email_sent", False),
+        }
+        for l in leads
+    ]
+    return JSONResponse(previews)
+
+
+@app.post("/api/runs/{run_id}/send-emails")
+async def send_emails(request: Request, run_id: str):
+    _require_auth(request)
+    if not INSTANTLY_API_KEY or not INSTANTLY_CAMPAIGN_ID:
+        return JSONResponse({"error": "Instantly not configured"}, status_code=400)
+    if not _pool:
+        return JSONResponse({"error": "Database required for email sending"}, status_code=400)
+
+    eligible = await store.get_leads_for_email(_pool, run_id, INSTANTLY_SCORE_THRESHOLD)
+    if not eligible:
+        return JSONResponse({"sent": 0, "message": "No eligible leads to send"})
+
+    await _send_to_instantly(eligible)
+
+    lead_ids = [l["lead_id"] for l in eligible]
+    await store.mark_leads_email_sent(_pool, run_id, lead_ids)
+
+    all_leads = await store.get_leads(_pool, run_id)
+    unsent = [l for l in all_leads
+              if not l.get("email_sent")
+              and l["decision"] in ("qualified", "review")
+              and l["score"] <= INSTANTLY_SCORE_THRESHOLD]
+    status = "partial" if unsent else "sent"
+    await store.update_run_email_status(_pool, run_id, status)
+
+    return JSONResponse({"sent": len(eligible), "email_status": status})
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
@@ -585,6 +688,26 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .ev-item.hard-dis::before { background:var(--red); }
 .signal-badge { display:inline-block; padding:2px 7px; border-radius:4px; font-size:10px; font-family:'DM Mono',monospace; background:var(--bg3); color:var(--text3); margin-bottom:8px; }
 
+/* ── Email preview ── */
+.email-preview { margin-top:14px; border-top:1px solid var(--border); padding-top:14px; }
+.email-preview-title { font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); font-family:'DM Mono',monospace; margin-bottom:10px; }
+.email-subject { display:flex; align-items:center; gap:8px; font-size:12px; font-family:'DM Mono',monospace; color:var(--text3); margin-bottom:8px; }
+.email-subject span { color:var(--text2); flex:1; }
+.email-body-wrap { position:relative; }
+.email-body { background:var(--bg3); border-radius:6px; padding:12px; font-size:12px; color:var(--text2); line-height:1.7; white-space:pre-wrap; font-family:'DM Mono',monospace; }
+.copy-btn { cursor:pointer; padding:3px 10px; border-radius:5px; font-size:11px; font-family:'DM Mono',monospace; background:var(--bg2); color:var(--text2); border:1px solid var(--border); white-space:nowrap; transition:all 0.15s; letter-spacing:0.03em; }
+.copy-btn:hover { background:var(--bg3); color:var(--text1); border-color:var(--text3); }
+.copy-btn.copied { color:var(--green); border-color:var(--green); background:rgba(74,222,128,0.08); }
+.email-body-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.email-body-label { font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); font-family:'DM Mono',monospace; }
+.manual-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'DM Mono',monospace; background:rgba(96,165,250,0.1); color:#60a5fa; margin-bottom:8px; }
+.email-sent-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'DM Mono',monospace; background:rgba(74,222,128,0.1); color:var(--green); margin-bottom:8px; }
+/* ── Email status on run items ── */
+.email-status-badge { font-size:9px; font-family:'DM Mono',monospace; padding:1px 5px; border-radius:3px; font-weight:600; }
+.email-status-badge.not_sent { background:rgba(255,255,255,0.05); color:var(--text3); }
+.email-status-badge.sent     { background:rgba(74,222,128,0.1); color:var(--green); }
+.email-status-badge.partial  { background:rgba(251,191,36,0.1); color:var(--amber); }
+
 /* ── Confirm modal ── */
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:100; }
 .modal-overlay.hidden { display:none; }
@@ -719,6 +842,7 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 
       <div class="sidebar-actions">
         <button class="sidebar-btn" onclick="show('s-upload')">+ New run</button>
+        <button class="sidebar-btn" id="send-instantly-btn" onclick="openSendModal()">Send to Instantly</button>
         <button class="sidebar-btn danger" onclick="confirmDelete()">Delete this run</button>
       </div>
     </aside>
@@ -752,6 +876,17 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="send-modal">
+  <div class="modal">
+    <h3>Send to Instantly</h3>
+    <p id="send-modal-body">Loading eligible leads...</p>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeSendModal()">Cancel</button>
+      <button class="modal-btn" id="send-modal-confirm" style="background:var(--green-bg);color:var(--green);border-color:var(--green);" onclick="confirmSendEmails()">Send</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="runs-modal" onclick="if(event.target===this) closeRunsModal()">
   <div class="runs-modal">
     <div class="runs-modal-head">
@@ -771,6 +906,7 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 // ── State ──────────────────────────────────────────────────────────────────────
 let allLeads      = [];
 let allRuns       = [];
+let emailPreviews = {};
 let currentRunId  = null;
 let selectedFile  = null;
 let concurrency   = 10;
@@ -941,9 +1077,30 @@ function formatRunDateTime(value) {
 async function loadRun(runId) {
   currentRunId = runId;
   setRunIdInUrl(runId);
-  const leads = await fetch('/api/results/' + runId).then(r => r.json());
+  const [leads, previews] = await Promise.all([
+    fetch('/api/results/' + runId).then(r => r.json()),
+    fetch('/api/runs/' + runId + '/email-preview')
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => []),
+  ]);
+  emailPreviews = {};
+  (Array.isArray(previews) ? previews : []).forEach(p => { emailPreviews[p.lead_id] = p; });
+  updateSendButton();
   populateResults(leads, runId);
   show('s-results');
+}
+
+function updateSendButton() {
+  const run = allRuns.find(r => r.run_id === currentRunId);
+  const btn = document.getElementById('send-instantly-btn');
+  if (!btn) return;
+  if (run && run.email_status === 'sent') {
+    btn.textContent = 'Emails sent ✓';
+    btn.disabled = true;
+  } else {
+    btn.textContent = 'Send to Instantly';
+    btn.disabled = false;
+  }
 }
 
 function populateResults(leads, runId) {
@@ -997,6 +1154,7 @@ function renderUploadRuns(runs) {
       r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
       r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
       r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
+      r.email_status   ? `<span class="email-status-badge ${r.email_status}">${r.email_status === 'not_sent' ? 'email not sent' : r.email_status === 'sent' ? 'emails sent' : 'partial'}</span>` : '',
     ].join('');
     return `
       <div class="run-item" onclick="loadRun('${r.run_id}')">
@@ -1026,6 +1184,7 @@ function renderPastRuns(runs) {
       r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
       r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
       r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
+      r.email_status   ? `<span class="email-status-badge ${r.email_status}">${r.email_status === 'not_sent' ? 'email not sent' : r.email_status === 'sent' ? 'emails sent' : 'partial'}</span>` : '',
     ].join('');
     return `
       <div class="run-item${isCurrent ? ' current' : ''}" onclick="loadRun('${r.run_id}')">
@@ -1170,6 +1329,31 @@ function renderRow(l, i) {
     ...(l.unknowns||[]).map(e=>`<div class="ev-item unknown">${e}</div>`),
     ...(l.hard_disqualifiers||[]).map(e=>`<div class="ev-item hard-dis">${e}</div>`),
   ].join('');
+  const preview = emailPreviews[l.lead_id];
+  const emailHtml = preview ? (() => {
+    const manualTag = preview.is_manual
+      ? `<span class="manual-badge">★ High value — send manually</span>`
+      : preview.email_sent
+        ? `<span class="email-sent-badge">✓ Sent to Instantly</span>`
+        : '';
+    const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
+    return `<div class="email-preview">
+      <div class="email-preview-title">Email Preview</div>
+      ${manualTag}
+      <div class="email-subject">
+        <span>Subject: <span>${preview.subject}</span></span>
+        <button class="copy-btn" onclick="copyEmailField(${lid},'subject',this)">⧉ Copy subject</button>
+      </div>
+      <div class="email-body-wrap">
+        <div class="email-body-header">
+          <span class="email-body-label">Body</span>
+          <button class="copy-btn" onclick="copyEmailField(${lid},'body',this)">⧉ Copy body</button>
+        </div>
+        <div class="email-body">${preview.body}</div>
+      </div>
+    </div>`;
+  })() : '';
+
   return `
     <div class="lead-row" id="lr-${i}" data-render-index="${i}">
       <div class="lead-summary" onclick="toggle(${i})">
@@ -1200,11 +1384,40 @@ function renderRow(l, i) {
             <div class="ev-section">${sigBadge}${evHtml}</div>
           </div>
         </div>
+        ${emailHtml}
       </div>
     </div>`;
 }
 
 function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
+
+function copyEmailField(leadId, field, btn) {
+  const preview = emailPreviews[leadId];
+  const text = (preview && preview[field]) || '';
+  const label = field === 'subject' ? '⧉ Copy subject' : '⧉ Copy body';
+  const doFlash = () => {
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 1800);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(doFlash).catch(() => fallbackCopy(text, doFlash));
+  } else {
+    fallbackCopy(text, doFlash);
+  }
+}
+
+function fallbackCopy(text, cb) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+  cb();
+}
 
 document.querySelector('.results-main').addEventListener('scroll', () => {
   if (!document.getElementById('s-results').classList.contains('active')) return;
@@ -1229,6 +1442,53 @@ async function deleteCurrentRun() {
   document.getElementById('drop-hint').style.display = '';
   document.getElementById('file-info').classList.remove('show');
   clearRunIdFromUrl();
+}
+
+// ── Send to Instantly ──────────────────────────────────────────────────────────
+async function openSendModal() {
+  if (!currentRunId) return;
+  document.getElementById('send-modal-body').textContent = 'Loading eligible leads...';
+  document.getElementById('send-modal-confirm').disabled = true;
+  document.getElementById('send-modal').classList.remove('hidden');
+
+  const previews = Object.values(emailPreviews);
+  const eligible  = previews.filter(p => !p.is_manual && !p.email_sent);
+  const manual    = previews.filter(p => p.is_manual);
+
+  if (!eligible.length) {
+    document.getElementById('send-modal-body').textContent =
+      manual.length
+        ? `All ${manual.length} eligible leads are high-value (score > threshold) — send these manually.`
+        : 'No eligible leads to send.';
+    return;
+  }
+
+  document.getElementById('send-modal-body').innerHTML =
+    `<strong>${eligible.length} lead${eligible.length > 1 ? 's' : ''}</strong> will be added to your Instantly campaign.` +
+    (manual.length ? `<br><br><span style="color:var(--blue)">★ ${manual.length} high-value lead${manual.length > 1 ? 's' : ''} (score &gt; threshold) excluded — send these manually.</span>` : '');
+  document.getElementById('send-modal-confirm').disabled = false;
+}
+
+function closeSendModal() {
+  document.getElementById('send-modal').classList.add('hidden');
+}
+
+async function confirmSendEmails() {
+  document.getElementById('send-modal-confirm').disabled = true;
+  document.getElementById('send-modal-body').textContent = 'Sending...';
+  try {
+    const res = await fetch('/api/runs/' + currentRunId + '/send-emails', { method: 'POST' }).then(r => r.json());
+    if (res.error) {
+      document.getElementById('send-modal-body').textContent = 'Error: ' + res.error;
+      return;
+    }
+    document.getElementById('send-modal-body').textContent = `✓ ${res.sent} lead${res.sent > 1 ? 's' : ''} sent to Instantly.`;
+    await loadPastRuns();
+    await loadRun(currentRunId);
+  } catch(e) {
+    document.getElementById('send-modal-body').textContent = 'Request failed. Check your Instantly config.';
+  }
+  setTimeout(closeSendModal, 2000);
 }
 
 async function boot() {

@@ -81,6 +81,12 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_website TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS signal_type TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_url TEXT")
+        # Email columns
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent BOOLEAN DEFAULT FALSE")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ")
+        # Email status on runs
+        await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS email_status TEXT DEFAULT 'not_sent'")
 
 
 async def mark_stale_runs(pool: asyncpg.Pool) -> None:
@@ -123,7 +129,7 @@ async def list_runs(pool: asyncpg.Pool) -> list:
     rows = await pool.fetch(
         """
         SELECT r.run_id, r.filename, r.status, r.lead_count,
-               r.created_at, r.completed_at,
+               r.created_at, r.completed_at, r.email_status,
                COUNT(l.id) AS n_total,
                COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
                COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
@@ -144,6 +150,7 @@ async def list_runs(pool: asyncpg.Pool) -> list:
             "n_review":       r["n_review"],
             "n_disqualified": r["n_disqualified"],
             "created_at":     r["created_at"].isoformat() if r["created_at"] else None,
+            "email_status":   r["email_status"] or "not_sent",
         }
         for r in rows
     ]
@@ -244,4 +251,33 @@ def _row_to_lead(row: asyncpg.Record) -> dict:
         "hard_disqualifiers": ev.get("hard_disqualifiers", []),
         "reasons":        row["qual_reasons"] or [],
         "disreasons":     row["disqual_reasons"] or [],
+        "email":          row["email"] or "",
+        "email_sent":     row["email_sent"] or False,
     }
+
+
+async def update_run_email_status(pool: asyncpg.Pool, run_id: str, status: str) -> None:
+    await pool.execute(
+        "UPDATE runs SET email_status=$1 WHERE run_id=$2", status, run_id
+    )
+
+
+async def mark_leads_email_sent(pool: asyncpg.Pool, run_id: str, lead_ids: list) -> None:
+    await pool.execute(
+        """UPDATE leads SET email_sent=TRUE, email_sent_at=now()
+             WHERE run_id=$1 AND lead_id = ANY($2::text[])""",
+        run_id, lead_ids,
+    )
+
+
+async def get_leads_for_email(pool: asyncpg.Pool, run_id: str, max_score: int) -> list:
+    rows = await pool.fetch(
+        """SELECT * FROM leads
+             WHERE run_id=$1
+               AND decision IN ('qualified','review')
+               AND score <= $2
+               AND email_sent = FALSE
+             ORDER BY score DESC""",
+        run_id, max_score,
+    )
+    return [_row_to_lead(r) for r in rows]
