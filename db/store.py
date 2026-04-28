@@ -55,6 +55,18 @@ CREATE TABLE IF NOT EXISTS leads (
 
 CREATE INDEX IF NOT EXISTS idx_leads_run     ON leads(run_id);
 CREATE INDEX IF NOT EXISTS idx_leads_run_dec ON leads(run_id, decision);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT        PRIMARY KEY,
+    value      TEXT        NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS exclusions (
+    id         SERIAL      PRIMARY KEY,
+    value      TEXT        NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -281,3 +293,45 @@ async def get_leads_for_email(pool: asyncpg.Pool, run_id: str, max_score: int) -
         run_id, max_score,
     )
     return [_row_to_lead(r) for r in rows]
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+_SETTINGS_DEFAULTS = {"qualified_threshold": "70", "disqualified_threshold": "60"}
+
+
+async def get_settings(pool: asyncpg.Pool) -> dict:
+    rows = await pool.fetch("SELECT key, value FROM settings")
+    result = dict(_SETTINGS_DEFAULTS)
+    for r in rows:
+        result[r["key"]] = r["value"]
+    return result
+
+
+async def save_settings(pool: asyncpg.Pool, settings: dict) -> None:
+    for key, value in settings.items():
+        await pool.execute(
+            """INSERT INTO settings(key, value) VALUES($1, $2)
+               ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()""",
+            key, str(value),
+        )
+
+
+# ── Exclusions ────────────────────────────────────────────────────────────────
+
+async def get_exclusions(pool: asyncpg.Pool) -> list:
+    rows = await pool.fetch(
+        "SELECT id, value FROM exclusions ORDER BY created_at DESC"
+    )
+    return [{"id": r["id"], "value": r["value"]} for r in rows]
+
+
+async def add_exclusion(pool: asyncpg.Pool, value: str) -> None:
+    await pool.execute(
+        "INSERT INTO exclusions(value) VALUES($1) ON CONFLICT DO NOTHING",
+        value.strip(),
+    )
+
+
+async def remove_exclusion(pool: asyncpg.Pool, exclusion_id: int) -> None:
+    await pool.execute("DELETE FROM exclusions WHERE id=$1", exclusion_id)
