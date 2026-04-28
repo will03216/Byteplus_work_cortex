@@ -19,9 +19,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import secrets
+
 import uvicorn
-from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).parent.parent
@@ -40,7 +43,10 @@ _jobs: dict = {}
 # ── DB pool (set in lifespan) ─────────────────────────────────────────────────
 _pool = None
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL   = os.getenv("DATABASE_URL", "")
+APP_USERNAME   = os.getenv("APP_USERNAME", "admin")
+APP_PASSWORD   = os.getenv("APP_PASSWORD", "changeme")
+SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -69,6 +75,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8)
+
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _is_authenticated(request: Request) -> bool:
+    return request.session.get("authenticated") is True
+
+
+def _require_auth(request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -152,10 +170,32 @@ def _summarize_run_dir(run_dir: Path) -> dict:
     }
 
 
+# ── Auth routes ───────────────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    return HTMLResponse(_LOGIN_HTML)
+
+
+@app.post("/login")
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    if secrets.compare_digest(username, APP_USERNAME) and secrets.compare_digest(password, APP_PASSWORD):
+        request.session["authenticated"] = True
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(_LOGIN_HTML.replace("<!--ERROR-->", '<p class="login-error">Invalid username or password</p>'), status_code=401)
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
 # ── API: run pipeline ─────────────────────────────────────────────────────────
 
 @app.post("/api/run")
-async def run_pipeline(file: UploadFile = File(...), concurrency: int = Form(10)):
+async def run_pipeline(request: Request, file: UploadFile = File(...), concurrency: int = Form(10)):
+    _require_auth(request)
     run_id  = str(uuid.uuid4())
     content = await file.read()
 
@@ -236,7 +276,8 @@ async def _import_to_db(run_id: str, run_dir: Path, returncode: int):
 # ── API: SSE progress stream ──────────────────────────────────────────────────
 
 @app.get("/api/progress/{run_id}")
-async def progress(run_id: str):
+async def progress(request: Request, run_id: str):
+    _require_auth(request)
     if run_id not in _jobs:
         return JSONResponse({"error": "not found"}, status_code=404)
 
@@ -258,7 +299,8 @@ async def progress(run_id: str):
 # ── API: results ──────────────────────────────────────────────────────────────
 
 @app.get("/api/results/{run_id}")
-async def get_results(run_id: str):
+async def get_results(request: Request, run_id: str):
+    _require_auth(request)
     # DB-backed (normal path)
     if _pool:
         leads = await store.get_leads(_pool, run_id)
@@ -271,7 +313,8 @@ async def get_results(run_id: str):
 
 
 @app.get("/api/runs")
-async def list_runs():
+async def list_runs(request: Request):
+    _require_auth(request)
     if _pool:
         return JSONResponse(await store.list_runs(_pool))
     # Fallback: list directories
@@ -282,7 +325,8 @@ async def list_runs():
 
 
 @app.delete("/api/runs/{run_id}")
-async def delete_run(run_id: str):
+async def delete_run(request: Request, run_id: str):
+    _require_auth(request)
     if _pool:
         await store.delete_run(_pool, run_id)
     run_dir = RUNS_DIR / run_id
@@ -293,6 +337,53 @@ async def delete_run(run_id: str):
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
+
+_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seedance · Sign in</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d0e0f; color: #f0ede8; font-family: system-ui, -apple-system, sans-serif;
+       min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.card { width: 100%; max-width: 360px; background: #141516; border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 16px; padding: 32px; display: flex; flex-direction: column; gap: 20px; }
+.logo { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.logo-mark { width: 32px; height: 32px; background: #c8ff57; border-radius: 8px;
+             display: flex; align-items: center; justify-content: center; }
+.logo-mark svg { width: 16px; height: 16px; }
+.logo-text { font-size: 15px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.logo-sub  { font-size: 11px; color: #5c5a57; letter-spacing: 0.04em; }
+h2 { font-size: 19px; font-weight: 700; }
+label { font-size: 12px; color: #9b9790; display: block; margin-bottom: 6px; }
+input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
+        background: #1c1e20; color: #f0ede8; font-size: 14px; font-family: inherit; outline: none; }
+input:focus { border-color: #c8ff57; }
+.field { display: flex; flex-direction: column; }
+button { width: 100%; padding: 13px; border-radius: 10px; border: none; background: #c8ff57;
+         color: #0d0e0f; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }
+button:hover { background: #d4ff3a; }
+.login-error { font-size: 12px; color: #f87171; text-align: center; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-mark"><svg viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="8" y="1" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="1" y="8" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="8" y="8" width="2" height="5" rx="1" fill="#0d0e0f"/></svg></div>
+    <div><div class="logo-text">Seedance</div><div class="logo-sub">Lead Pipeline</div></div>
+  </div>
+  <h2>Sign in</h2>
+  <!--ERROR-->
+  <form method="post" action="/login" style="display:flex;flex-direction:column;gap:16px;">
+    <div class="field"><label>Username</label><input name="username" type="text" autocomplete="username" required autofocus></div>
+    <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
+    <button type="submit">Sign in →</button>
+  </form>
+</div>
+</body>
+</html>"""
 
 HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -1157,7 +1248,9 @@ boot();
 
 
 @app.get("/")
-async def index():
+async def index(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
     return HTMLResponse(HTML)
 
 
