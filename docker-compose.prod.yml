@@ -1,0 +1,24 @@
+services:
+  app:
+    image: ${CR_REGISTRY}/${CR_NAMESPACE}/${CR_REPO}:latest
+    ports:
+      - "80:8080"
+    environment:
+      DATABASE_URL:        ${DATABASE_URL}
+      LLM_API_KEY:         ${LLM_API_KEY}
+      LLM_MODEL:           ${LLM_MODEL}
+      LLM_PROVIDER:        ${LLM_PROVIDER:-}
+      LLM_API_BASE:        ${LLM_API_BASE:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+    volumes:
+      - run_data:/app/output/runs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  run_data:

@@ -1,0 +1,15 @@
+# Secrets — never commit these
+.env
+.env.deploy
+.env.production
+scripts/user-data.sh      # generated file, contains secrets
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Output
+output/runs/
+*.csv
+*.log

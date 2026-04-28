@@ -5,6 +5,6 @@ __pycache__
 *.pyc
 *.pyo
 *.csv
-output/
+output/runs/
 *.log
 ui/app.py

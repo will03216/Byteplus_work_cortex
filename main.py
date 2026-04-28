@@ -32,7 +32,7 @@ from normalization.csv_loader import load_csv
 from tools import enrich_lead, EnrichedLead
 from claude import extract_evidence, EvidenceOutput, make_decision, DecisionOutput
 from router import route_decision
-from output import write_result, init_output_dir
+from output.csv_writer import write_result, init_output_dir
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
