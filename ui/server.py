@@ -161,6 +161,7 @@ def _read_run_files(run_dir: Path) -> list:
                     "name":           row.get("person_name", ""),
                     "company":        row.get("company_name", ""),
                     "company_size":   input_payload.get("company_size", ""),
+                    "industry":       ev.get("segment", ""),
                     "linkedin_url":   input_payload.get("linkedin_url", ""),
                     "company_website": input_payload.get("company_domain", ""),
                     "role":           row.get("title", ""),
@@ -438,6 +439,34 @@ async def email_preview(request: Request, run_id: str):
         for l in leads
     ]
     return JSONResponse(previews)
+
+
+@app.get("/api/runs/{run_id}/export")
+async def export_run(request: Request, run_id: str):
+    _require_auth(request)
+    if _pool:
+        leads = await store.get_leads(_pool, run_id)
+    elif (RUNS_DIR / run_id).exists():
+        leads = _read_run_files(RUNS_DIR / run_id)
+    else:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+    leads = _apply_thresholds(leads)
+
+    import io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["name", "company", "decision", "score", "email_subject", "email_body"])
+    for l in leads:
+        email = _build_email(l)
+        writer.writerow([l["name"], l["company"], l["decision"], l["score"],
+                         email["subject"], email["body"]])
+
+    filename = f"leads-{run_id[:8]}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/runs/{run_id}/send-emails")
@@ -958,6 +987,7 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
       <div class="sidebar-actions">
         <button class="sidebar-btn" onclick="show('s-upload')">+ New run</button>
         <button class="sidebar-btn" id="send-instantly-btn" onclick="openSendModal()">Send to Instantly</button>
+        <button class="sidebar-btn" onclick="exportRun()">↓ Export CSV</button>
         <button class="sidebar-btn" onclick="openSettings()">⚙ Settings</button>
         <button class="sidebar-btn danger" onclick="confirmDelete()">Delete this run</button>
       </div>
@@ -1486,7 +1516,8 @@ function renderRow(l, i) {
   const [abg, afg] = PALETTES[i % PALETTES.length];
   const sc = scoreClass(l.decision);
   const companyMeta = [l.company, l.role].filter(Boolean).join(' · ');
-  const companySizeMeta = l.company_size ? `Company size: ${l.company_size}` : '';
+  const companySizeMeta = l.company_size ? `${l.company_size} employees` : '';
+  const industryMeta    = l.industry ? l.industry.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()) : '';
   const miniBars = ['segment','workflow','pain','buyer','commercial'].map(k => {
     const h = Math.max(3, Math.round(l[k]/MAX[k]*20));
     return `<div class="mini-bar" style="height:${h}px;background:${CLR[k]};opacity:0.75;"></div>`;
@@ -1505,7 +1536,7 @@ function renderRow(l, i) {
   const sourceText = `<div class="detail-source">Generated from: ${formatSignalType(l.signal_type)}</div>`;
   const sourceLink = l.source_url ? `<a class="detail-link" href="${l.source_url}" target="_blank" rel="noopener noreferrer">Open source reference ↗</a>` : '';
   const referenceLinks = [linkedinLink, companyWebsiteLink, sourceText, sourceLink].filter(Boolean).join('');
-  const detailMeta = [companySizeMeta].filter(Boolean).map(v => `<span class="meta-pill">${v}</span>`).join('');
+  const detailMeta = [industryMeta, companySizeMeta].filter(Boolean).map(v => `<span class="meta-pill">${v}</span>`).join('');
   const evHtml = [
     ...(l.observed||[]).map(e=>`<div class="ev-item">${e}</div>`),
     ...(l.inferred||[]).map(e=>`<div class="ev-item inferred">${e}</div>`),
@@ -1544,7 +1575,7 @@ function renderRow(l, i) {
         <div>
           <div class="lead-name">${l.name}</div>
           <div class="lead-company">${companyMeta}</div>
-          ${companySizeMeta ? `<div class="lead-company-extra">${companySizeMeta}</div>` : ''}
+          ${(industryMeta || companySizeMeta) ? `<div class="lead-company-extra">${[industryMeta, companySizeMeta].filter(Boolean).join(' · ')}</div>` : ''}
         </div>
         <div class="mini-bars">${miniBars}</div>
         <span class="decision-badge ${l.decision}">${l.decision}</span>
@@ -1687,6 +1718,14 @@ async function openSettings() {
   document.getElementById('input-dis-threshold').value  = s.disqualified_threshold;
   renderExclusions();
   show('s-settings');
+}
+
+function exportRun() {
+  if (!currentRunId) return;
+  const a = document.createElement('a');
+  a.href = '/api/runs/' + currentRunId + '/export';
+  a.download = 'leads-' + currentRunId.slice(0, 8) + '.csv';
+  a.click();
 }
 
 function backToResults() {

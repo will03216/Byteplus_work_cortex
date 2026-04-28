@@ -89,6 +89,7 @@ async def create_tables(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_DDL)
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_size TEXT")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS industry TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS linkedin_url TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_website TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS signal_type TEXT")
@@ -184,27 +185,28 @@ async def upsert_lead(pool: asyncpg.Pool, run_id: str, lead: dict) -> None:
     await pool.execute(
         """
         INSERT INTO leads (
-            run_id, lead_id, person_name, company, company_size, linkedin_url, company_website, title,
+            run_id, lead_id, person_name, company, company_size, industry, linkedin_url, company_website, title,
             signal_type, source_url, decision, score, confidence,
             segment_fit, buyer_fit, pain_fit, workflow_fit, commercial_fit,
             reasoning, use_case, signal_strength,
             evidence, qual_reasons, disqual_reasons
         ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
         )
         ON CONFLICT (run_id, lead_id) DO UPDATE SET
-            company_size=$5, linkedin_url=$6, company_website=$7, signal_type=$9, source_url=$10,
-            decision=$11, score=$12, confidence=$13,
-            segment_fit=$14, buyer_fit=$15, pain_fit=$16,
-            workflow_fit=$17, commercial_fit=$18,
-            reasoning=$19, use_case=$20, signal_strength=$21,
-            evidence=$22, qual_reasons=$23, disqual_reasons=$24
+            company_size=$5, industry=$6, linkedin_url=$7, company_website=$8, signal_type=$10, source_url=$11,
+            decision=$12, score=$13, confidence=$14,
+            segment_fit=$15, buyer_fit=$16, pain_fit=$17,
+            workflow_fit=$18, commercial_fit=$19,
+            reasoning=$20, use_case=$21, signal_strength=$22,
+            evidence=$23, qual_reasons=$24, disqual_reasons=$25
         """,
         run_id,
         lead.get("lead_id", lead.get("name", "")),
         lead.get("name", ""),
         lead.get("company", ""),
         lead.get("company_size", ""),
+        lead.get("industry", ""),
         lead.get("linkedin_url", ""),
         lead.get("company_website", ""),
         lead.get("role", ""),
@@ -241,6 +243,7 @@ def _row_to_lead(row: asyncpg.Record) -> dict:
         "name":           row["person_name"] or "",
         "company":        row["company"] or "",
         "company_size":   row["company_size"] or "",
+        "industry":       row["industry"] or "",
         "linkedin_url":   row["linkedin_url"] or "",
         "company_website": row["company_website"] or "",
         "role":           row["title"] or "",
