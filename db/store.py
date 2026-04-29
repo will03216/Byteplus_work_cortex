@@ -107,6 +107,7 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent BOOLEAN DEFAULT FALSE")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ")
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS manual_email_status TEXT")
         # Email status on runs
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS email_status TEXT DEFAULT 'not_sent'")
 
@@ -275,8 +276,9 @@ def _row_to_lead(row: asyncpg.Record) -> dict:
         "hard_disqualifiers": ev.get("hard_disqualifiers", []),
         "reasons":        row["qual_reasons"] or [],
         "disreasons":     row["disqual_reasons"] or [],
-        "email":          row["email"] or "",
-        "email_sent":     row["email_sent"] or False,
+        "email":                row["email"] or "",
+        "email_sent":           row["email_sent"] or False,
+        "manual_email_status":  row["manual_email_status"] or None,
     }
 
 
@@ -291,6 +293,15 @@ async def mark_leads_email_sent(pool: asyncpg.Pool, run_id: str, lead_ids: list)
         """UPDATE leads SET email_sent=TRUE, email_sent_at=now()
              WHERE run_id=$1 AND lead_id = ANY($2::text[])""",
         run_id, lead_ids,
+    )
+
+
+async def set_lead_manual_email_status(
+    pool: asyncpg.Pool, run_id: str, lead_id: str, status: str
+) -> None:
+    await pool.execute(
+        "UPDATE leads SET manual_email_status=$1 WHERE run_id=$2 AND lead_id=$3",
+        status, run_id, lead_id,
     )
 
 

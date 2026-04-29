@@ -27,7 +27,6 @@ load_dotenv()
 
 import config
 from llm import LiteLLMClient
-from llm.client import configure_ssl
 from normalization import normalize_batch, LeadInput
 from normalization.csv_loader import load_csv
 from tools import enrich_lead, EnrichedLead
@@ -175,10 +174,18 @@ async def run_batch(
             raw_leads = json.load(f)
     else:
         raise ValueError(f"Unsupported input format '{suffix}'. Use .json or .csv")
+    # #region debug-point D:raw-load
+    try: import urllib.request; urllib.request.urlopen(urllib.request.Request("http://host.docker.internal:7777/event", data=json.dumps({"sessionId":"run-import-missing","runId":"pre-fix","hypothesisId":"D","location":"main.py:run_batch:raw","msg":"[DEBUG] raw leads loaded","data":{"input_path":input_path,"suffix":suffix,"raw_lead_count":len(raw_leads)}}).encode(), headers={"Content-Type":"application/json"}), timeout=2).read()
+    except Exception: pass
+    # #endregion
     logger.info("Loaded %d raw leads from %s", len(raw_leads), input_path)
 
     # Normalize + deduplicate
     leads = normalize_batch(raw_leads)
+    # #region debug-point D:normalized-load
+    try: import urllib.request; urllib.request.urlopen(urllib.request.Request("http://host.docker.internal:7777/event", data=json.dumps({"sessionId":"run-import-missing","runId":"pre-fix","hypothesisId":"D","location":"main.py:run_batch:normalized","msg":"[DEBUG] leads normalized","data":{"raw_lead_count":len(raw_leads),"normalized_count":len(leads),"skipped_count":len(raw_leads) - len(leads)}}).encode(), headers={"Content-Type":"application/json"}), timeout=2).read()
+    except Exception: pass
+    # #endregion
     logger.info("Normalized %d valid leads (skipped %d)", len(leads), len(raw_leads) - len(leads))
 
     if not leads:
@@ -193,8 +200,6 @@ async def run_batch(
         raise RuntimeError("LLM_API_KEY environment variable is not set")
     if not config.LLM_MODEL:
         raise RuntimeError("LLM_MODEL environment variable is not set")
-
-    configure_ssl(config.LLM_SSL_VERIFY)
 
     stats = RunStats()
     sem   = asyncio.Semaphore(concurrency)

@@ -643,6 +643,20 @@ async def api_import_exclusions(request: Request, file: UploadFile = File(...)):
     return JSONResponse({"ok": True, "imported": len(urls)})
 
 
+# ── API: per-lead manual email status ─────────────────────────────────────────
+
+@app.post("/api/runs/{run_id}/leads/{lead_id}/email-status")
+async def api_set_lead_email_status(request: Request, run_id: str, lead_id: str):
+    _require_auth(request)
+    data   = await request.json()
+    status = data.get("status", "")
+    if status not in ("sent", "not_sent"):
+        return JSONResponse({"error": "status must be 'sent' or 'not_sent'"}, status_code=400)
+    if _pool:
+        await store.set_lead_manual_email_status(_pool, run_id, lead_id, status)
+    return JSONResponse({"ok": True, "lead_id": lead_id, "status": status})
+
+
 # ── API: email templates ───────────────────────────────────────────────────────
 
 @app.get("/api/email-templates")
@@ -911,7 +925,7 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .lead-row { background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden; transition:border-color 0.15s; animation:fadeIn 0.2s ease both; }
 @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1} }
 .lead-row:hover { border-color:var(--border2); }
-.lead-summary { display:grid; grid-template-columns:36px 1fr 100px 80px 90px 28px; align-items:center; gap:14px; padding:13px 16px; cursor:pointer; user-select:none; }
+.lead-summary { display:grid; grid-template-columns:36px 1fr 100px 80px auto 28px; align-items:center; gap:14px; padding:13px 16px; cursor:pointer; user-select:none; }
 .avatar { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex-shrink:0; }
 .lead-name { font-size:14px; font-weight:600; }
 .lead-company { font-size:11px; color:var(--text3); margin-top:1px; font-family:'DM Mono',monospace; }
@@ -1034,6 +1048,10 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .import-csv-row { display:flex; align-items:center; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
 .import-csv-label { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; flex:1; line-height:1.5; }
 .leads-grid.rerendering { opacity: 0; }
+.score-cell { display:flex; flex-direction:column; align-items:flex-end; gap:3px; min-width:52px; }
+.manual-email-badge { font-size:9px; font-family:'DM Mono',monospace; padding:1px 5px; border-radius:3px; font-weight:600; white-space:nowrap; line-height:1.4; }
+.manual-email-badge.sent     { background:rgba(74,222,128,0.12); color:var(--green); border:1px solid rgba(74,222,128,0.25); }
+.manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
 
 /* ── Email Templates ── */
 .tmpl-list { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; max-height:360px; overflow-y:auto; }
@@ -1232,6 +1250,18 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
     </div>
     <div class="runs-modal-list" id="runs-modal-list">
       <div class="runs-modal-empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Email sent confirmation modal (blocking — no dismiss on backdrop) ── -->
+<div class="modal-overlay hidden" id="email-confirm-modal">
+  <div class="modal" style="max-width:380px;">
+    <h3 id="email-confirm-title" style="margin-bottom:10px;">Did you send this email?</h3>
+    <p id="email-confirm-sub" style="margin-bottom:24px;">Mark whether you sent the email to <strong id="email-confirm-name"></strong> at <strong id="email-confirm-company"></strong>.</p>
+    <div class="modal-actions" style="justify-content:stretch;gap:10px;">
+      <button class="modal-btn" id="email-confirm-no" style="flex:1;background:var(--bg3);color:var(--text2);" onclick="confirmEmailStatus('not_sent')">No, didn't send</button>
+      <button class="modal-btn confirm" id="email-confirm-yes" style="flex:1;background:var(--green-bg);color:var(--green);border-color:var(--green);" onclick="confirmEmailStatus('sent')">Yes, sent it ✓</button>
     </div>
   </div>
 </div>
@@ -1813,7 +1843,11 @@ function renderRow(l, i) {
         </div>
         <div class="mini-bars">${miniBars}</div>
         <span class="decision-badge ${l.decision}">${l.decision}</span>
-        <span class="score-num ${sc}">${l.score}</span>
+        <div class="score-cell">
+          <span class="score-num ${sc}">${l.score}</span>
+          ${l.manual_email_status === 'sent'     ? '<span class="manual-email-badge sent">✉ sent</span>'     : ''}
+          ${l.manual_email_status === 'not_sent' ? '<span class="manual-email-badge not_sent">✉ not sent</span>' : ''}
+        </div>
         <span class="chevron">▶</span>
       </div>
       <div class="lead-detail">
@@ -1839,6 +1873,8 @@ function renderRow(l, i) {
 
 function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
 
+let _emailConfirmLeadId = null;
+
 function copyEmailField(leadId, field, btn) {
   const preview = emailPreviews[leadId];
   const text = (preview && preview[field]) || '';
@@ -1847,12 +1883,35 @@ function copyEmailField(leadId, field, btn) {
     btn.textContent = '✓ Copied!';
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 1800);
+    if (field === 'body') openEmailConfirmModal(leadId);
   };
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).then(doFlash).catch(() => fallbackCopy(text, doFlash));
   } else {
     fallbackCopy(text, doFlash);
   }
+}
+
+function openEmailConfirmModal(leadId) {
+  _emailConfirmLeadId = leadId;
+  const lead = allLeads.find(l => l.lead_id === leadId);
+  document.getElementById('email-confirm-name').textContent    = lead ? lead.name    : leadId;
+  document.getElementById('email-confirm-company').textContent = lead ? lead.company : '';
+  document.getElementById('email-confirm-modal').classList.remove('hidden');
+}
+
+async function confirmEmailStatus(status) {
+  const leadId = _emailConfirmLeadId;
+  document.getElementById('email-confirm-modal').classList.add('hidden');
+  _emailConfirmLeadId = null;
+  if (!leadId || !currentRunId) return;
+  await fetch(`/api/runs/${currentRunId}/leads/${encodeURIComponent(leadId)}/email-status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  const lead = allLeads.find(l => l.lead_id === leadId);
+  if (lead) { lead.manual_email_status = status; renderLeads(currentFilter); }
 }
 
 function fallbackCopy(text, cb) {

@@ -46,6 +46,8 @@ flag this explicitly. New executives are under pressure to deliver and actively 
 JUNIOR ROLE = HARD DISQUALIFY: intern, junior, coordinator, assistant, analyst without seniority.
 Antti's rule: "junior contacts with limited buying power" are NOT targets.
 
+NOT A TARGET (score buyer_fit 0–5): Creative Partner, Creative AI Partner — these are partnership/vendor-facing roles with no production budget authority. Do NOT treat them as senior buyers regardless of seniority signals.
+
 ## Signal Engagement Hierarchy
 Antti's stated priority order:
 - POST (they published content) → HIGH signal
@@ -119,7 +121,7 @@ Award higher scores for newly appointed executives (< 12 months) — they are un
 - 22–25: C-suite, Founder, VP, Head of Production/Content/Creative, Executive Producer, Head of Programming Production, Head of Product / Product Lead for creative-generation or ad-creative workflows OR any senior role newly appointed
 - 15–21: Director, Television Director, Broadcast Director, Creative Director, Senior Producer, Senior Manager, Lead, Product Manager / Group Product Manager in adtech, martech, creative-performance, or AI-creative tooling with meaningful workflow influence
 - 6–14:  Individual contributor in right department (designer, editor, producer — no seniority)
-- 0–5:   Junior, intern, coordinator, assistant, analyst — no buying power
+- 0–5:   Junior, intern, coordinator, assistant, analyst — no buying power. Also: Creative Partner, Creative AI Partner — partnership roles with no production budget authority.
 
 ### Pain Fit (20 points)
 - 18–20: Explicit pain — production too slow, too expensive, or can't scale to demand
