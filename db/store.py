@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS exclusions (
     value      TEXT        NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS email_templates (
+    id         SERIAL      PRIMARY KEY,
+    vertical   TEXT        NOT NULL,
+    name       TEXT        NOT NULL,
+    subject    TEXT        NOT NULL,
+    body       TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -338,3 +347,237 @@ async def add_exclusion(pool: asyncpg.Pool, value: str) -> None:
 
 async def remove_exclusion(pool: asyncpg.Pool, exclusion_id: int) -> None:
     await pool.execute("DELETE FROM exclusions WHERE id=$1", exclusion_id)
+
+
+# ── Email Templates ───────────────────────────────────────────────────────────
+
+_SEED_TEMPLATES = [
+    {
+        "vertical": "ai_tools",
+        "name": "AI Tools – Day 0 Partner",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+X community went wild about new Seedance 2.0 teasers.
+
+What about {company} as a Day 0 launch partner, right next to Freepik, Krea, Artlist, Picsart, and Higgsfield?
+
+If interested, let's chat:
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6
+
+--
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Address: 4 Lindsey St, London""",
+    },
+    {
+        "vertical": "film_production",
+        "name": "Film Production – First Email",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+Film production enthusiasts are calling Seedance 2.0 a real-time disruption of the entertainment industry.
+Model can produce a usable video about 90% of the time on the very first try, due to strong prompt adherence.
+
+Relevant for {company}?
+
+---
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
+    },
+    {
+        "vertical": "vfx_production",
+        "name": "VFX Production – Omni Feature",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+You might find this interesting.
+
+For VFX projects, the Seedance Omni feature excels in the following areas:
+- Physical dynamics and motion
+- Large visual effects shots
+- Cinematic movement
+- Complex environments
+
+OMNI allows combining multiple references in single generation: images, video, and audio.
+
+Relevant for {company}?
+
+ps. 4K output is coming soon.
+
+--
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
+    },
+    {
+        "vertical": "animation",
+        "name": "Animation – Real-time Disruption",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+Film production enthusiasts are calling Seedance 2.0 a real-time disruption of the entertainment industry.
+Model can produce a usable video about 90% of the time on the very first try, due to strong prompt adherence.
+
+Relevant for {company}?
+
+--
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
+    },
+    {
+        "vertical": "short_drama",
+        "name": "Short Drama – Day 0 Access",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+New Seedance 2.0 is coming soon.
+It will be the most advanced AI video model across all parameters.
+Ideal fit for vertical dramas and film studios.
+So far 15 studios have signed up for Day 0 access.
+
+Would this be a good time to explore ByteDance models and potential partnerships?
+
+--
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
+    },
+    {
+        "vertical": "ecommerce",
+        "name": "Ecommerce – Knowledge Session",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+In the retail sector, new ByteDance AI models are becoming popular.
+Due to demand, we are creating knowledge sessions.
+
+30min Knowledge Session
+- Who are ByteDance
+- Seedance 2.0 & Seedream 5.0
+- What the models can and can't do
+- Where do we expect to be in 12 months
+
+20 min presentation with 10 mins for questions.
+At the end, we offer test credits so you & your team can test yourselves.
+
+Interested?
+
+--
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
+    },
+    {
+        "vertical": "ai_generic",
+        "name": "AI Generic – Advanced Model",
+        "subject": "Seedance 2.0 + {company}?",
+        "body": """Hi {first_name},
+
+You might find this interesting as this is relevant in your space.
+
+New Seedance 2.0 is the most advanced AI video model in the world.
+Ideal fit for creative production, your industry, and film studios.
+So far 20+ companies have signed up for Day 0 access.
+
+Would this be a good time to explore ByteDance models and potential partnerships?
+
+ps. direct API comes with advanced capabilities.
+
+Happy to explain more if it seems relevant.
+
+--
+Antti Eskola
+Enterprise Partnerships & Solutions
+Email: antti.eskola@bytedance.com
+Mobile: +44 7999 826 189
+Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
+    },
+]
+
+
+async def seed_email_templates(pool: asyncpg.Pool) -> None:
+    count = await pool.fetchval("SELECT COUNT(*) FROM email_templates")
+    if count and count > 0:
+        return
+    for t in _SEED_TEMPLATES:
+        await pool.execute(
+            "INSERT INTO email_templates (vertical, name, subject, body) VALUES ($1,$2,$3,$4)",
+            t["vertical"], t["name"], t["subject"], t["body"],
+        )
+
+
+async def get_email_templates(pool: asyncpg.Pool) -> list:
+    rows = await pool.fetch(
+        "SELECT id, vertical, name, subject, body, created_at FROM email_templates ORDER BY vertical, id"
+    )
+    return [
+        {
+            "id":       r["id"],
+            "vertical": r["vertical"],
+            "name":     r["name"],
+            "subject":  r["subject"],
+            "body":     r["body"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+
+
+async def add_email_template(
+    pool: asyncpg.Pool, vertical: str, name: str, subject: str, body: str
+) -> dict:
+    row = await pool.fetchrow(
+        """INSERT INTO email_templates (vertical, name, subject, body)
+           VALUES ($1,$2,$3,$4)
+           RETURNING id, vertical, name, subject, body, created_at""",
+        vertical, name, subject, body,
+    )
+    return {
+        "id":       row["id"],
+        "vertical": row["vertical"],
+        "name":     row["name"],
+        "subject":  row["subject"],
+        "body":     row["body"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+async def update_email_template(
+    pool: asyncpg.Pool, template_id: int, vertical: str, name: str, subject: str, body: str
+) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """UPDATE email_templates
+              SET vertical=$2, name=$3, subject=$4, body=$5
+            WHERE id=$1
+        RETURNING id, vertical, name, subject, body, created_at""",
+        template_id, vertical, name, subject, body,
+    )
+    if not row:
+        return None
+    return {
+        "id":       row["id"],
+        "vertical": row["vertical"],
+        "name":     row["name"],
+        "subject":  row["subject"],
+        "body":     row["body"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+async def delete_email_template(pool: asyncpg.Pool, template_id: int) -> None:
+    await pool.execute("DELETE FROM email_templates WHERE id=$1", template_id)

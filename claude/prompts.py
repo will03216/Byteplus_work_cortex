@@ -76,7 +76,7 @@ IMPORTANT: only put CONFIRMED negatives in hard_disqualifiers.
 - "Potential competitor", "unclear if competitor", and "needs review" must NOT trigger hard_disqualifiers.
 
 ## Segment Classification Options
-film_studio | film_production | broadcast_network | television_production | media_production_org | short_drama | ai_tools | creative_agency | creative_performance | content_creator | advertising | marketing_scale | unknown
+film_studio | film_production | broadcast_network | television_production | media_production_org | short_drama | vfx_production | animation | ai_tools | creative_agency | creative_performance | content_creator | advertising | marketing_scale | unknown
 
 ## Evidence Classification Rules
 1. OBSERVED = directly stated in the signal (only what is explicit)

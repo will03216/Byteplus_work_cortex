@@ -25,6 +25,7 @@ LLM_MODEL           = _normalize_model_name(os.getenv("LLM_MODEL") or DEFAULT_LL
 LLM_API_KEY         = os.getenv("LLM_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
 LLM_API_BASE        = os.getenv("LLM_API_BASE") or None
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+LLM_SSL_VERIFY      = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 
 # ── Scoring weights (must sum to 100) ───────────────────────────────────────
 # Calibrated against Antti (Head of SDR) meeting — 2026-04-17

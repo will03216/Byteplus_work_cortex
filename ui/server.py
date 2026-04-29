@@ -43,9 +43,10 @@ _jobs: dict = {}
 # ── DB pool (set in lifespan) ─────────────────────────────────────────────────
 _pool = None
 
-# ── Settings & exclusions cache (loaded from DB at startup) ───────────────────
+# ── Settings, exclusions, and template cache (loaded from DB at startup) ───────
 _settings: dict = {"qualified_threshold": 70, "disqualified_threshold": 60}
 _exclusions: list = []
+_templates: list = []  # all email_templates rows, refreshed on add/delete
 
 DATABASE_URL              = os.getenv("DATABASE_URL", "")
 APP_USERNAME              = os.getenv("APP_USERNAME", "admin")
@@ -73,6 +74,8 @@ async def lifespan(app: FastAPI):
             _settings["qualified_threshold"]    = int(s.get("qualified_threshold", 70))
             _settings["disqualified_threshold"] = int(s.get("disqualified_threshold", 60))
             _exclusions[:] = await store.get_exclusions(_pool)
+            await store.seed_email_templates(_pool)
+            _templates[:] = await store.get_email_templates(_pool)
             logger.info("PostgreSQL connected: %s", DATABASE_URL.split("@")[-1])
         except Exception as exc:
             logger.error("DB connection failed: %s — running without persistence", exc)
@@ -121,10 +124,35 @@ def _apply_thresholds(leads: list) -> list:
     return result
 
 
+def _normalize_url(url: str) -> str:
+    url = (url or "").strip().lower()
+    url = re.sub(r'^https?://', '', url)
+    url = re.sub(r'^www\.', '', url)
+    return url.split('/')[0].rstrip('.')
+
+
+def _excl_url_set() -> set:
+    return {_normalize_url(e["value"]) for e in _exclusions if e.get("value")}
+
+
 def _is_excluded(lead: dict) -> bool:
-    excl_values = {e["value"].lower() for e in _exclusions}
-    haystack = f"{lead.get('name','')} {lead.get('company','')}".lower()
-    return any(v in haystack for v in excl_values)
+    urls = _excl_url_set()
+    if not urls:
+        return False
+    lead_url = _normalize_url(lead.get("company_website") or "")
+    return bool(lead_url and lead_url in urls)
+
+
+def _mark_exclusions(leads: list) -> list:
+    urls = _excl_url_set()
+    if not urls:
+        return leads
+    result = []
+    for lead in leads:
+        l = dict(lead)
+        l["excluded"] = _normalize_url(l.get("company_website") or "") in urls
+        result.append(l)
+    return result
 
 
 def _read_run_files(run_dir: Path) -> list:
@@ -209,24 +237,47 @@ def _summarize_run_dir(run_dir: Path) -> dict:
 
 # ── Email helpers ─────────────────────────────────────────────────────────────
 
+# Maps LLM segment values → template vertical keys
+_SEGMENT_TO_VERTICAL = {
+    "ai_tools":            "ai_tools",
+    "film_studio":         "film_production",
+    "film_production":     "film_production",
+    "broadcast_network":   "film_production",
+    "television_production": "film_production",
+    "media_production_org": "film_production",
+    "vfx_production":      "vfx_production",
+    "animation":           "animation",
+    "short_drama":         "short_drama",
+    "creative_agency":     "ecommerce",
+    "creative_performance": "ecommerce",
+    "content_creator":     "ecommerce",
+    "advertising":         "ecommerce",
+    "marketing_scale":     "ecommerce",
+    "unknown":             "ai_generic",
+}
+
+
 def _build_email(lead: dict) -> dict:
     first_name = (lead.get("name") or "there").split()[0]
     company    = lead.get("company") or "your company"
+    industry   = (lead.get("industry") or "").strip().lower()
+    vertical   = _SEGMENT_TO_VERTICAL.get(industry, "ai_generic")
 
-    subject = f"Seedance 2.0 + {company}?"
-    body = f"""Hi {first_name},
+    # Find matching template from cache (first match for vertical wins)
+    tmpl = next((t for t in _templates if t["vertical"] == vertical), None)
+    if tmpl is None:
+        # Fall back to ai_generic
+        tmpl = next((t for t in _templates if t["vertical"] == "ai_generic"), None)
 
-Saw {company} is pushing deeper into AI-powered design and video workflows — like the direction you're taking on the creative side.
+    if tmpl:
+        subject = tmpl["subject"].replace("{first_name}", first_name).replace("{company}", company)
+        body    = tmpl["body"].replace("{first_name}", first_name).replace("{company}", company)
+    else:
+        # Hardcoded fallback if DB has no templates yet
+        subject = f"Seedance 2.0 + {company}?"
+        body    = f"Hi {first_name},\n\nWould this be a good time to explore ByteDance models and potential partnerships?\n\n/Antti\nBook 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6"
 
-Looks like an interesting moment too: Veed, Krea, and Pollo have all started layering in ByteDance video models for tighter control and consistency across generations.
-
-Might be relevant for {company} — Seedance 2.0 was built around prompt controllability and visual consistency across shots, two things designers and agencies feel most acutely.
-
-Worth a quick 15–20 min chat?
-
-Best,
-Antti"""
-    return {"subject": subject, "body": body}
+    return {"subject": subject, "body": body, "vertical": vertical}
 
 
 async def _send_to_instantly(leads: list) -> dict:
@@ -391,7 +442,7 @@ async def get_results(request: Request, run_id: str):
         leads = _read_run_files(RUNS_DIR / run_id)
     else:
         return JSONResponse([], status_code=404)
-    return JSONResponse(_apply_thresholds(leads))
+    return JSONResponse(_mark_exclusions(_apply_thresholds(leads)))
 
 
 @app.get("/api/runs")
@@ -450,7 +501,7 @@ async def export_run(request: Request, run_id: str):
         leads = _read_run_files(RUNS_DIR / run_id)
     else:
         return JSONResponse({"error": "Run not found"}, status_code=404)
-    leads = _apply_thresholds(leads)
+    leads = [l for l in _apply_thresholds(leads) if not _is_excluded(l)]
 
     import io
     buf = io.StringIO()
@@ -552,6 +603,110 @@ async def api_remove_exclusion(request: Request, exclusion_id: int):
     for i, e in enumerate(_exclusions):
         if e["id"] == exclusion_id:
             _exclusions.pop(i)
+            break
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/exclusions/import")
+async def api_import_exclusions(request: Request, file: UploadFile = File(...)):
+    _require_auth(request)
+    import io as _io
+    content = await file.read()
+    text = content.decode("utf-8-sig").strip()
+    urls = []
+
+    _URL_COLS = {"COMPANY URL", "company_url", "company_website", "Website", "website", "URL", "url"}
+    first_line = text.split("\n")[0].strip().strip('"')
+
+    if first_line in _URL_COLS or not first_line.startswith("http"):
+        # Trigify-style CSV with a header row
+        reader = csv.DictReader(_io.StringIO(text))
+        for row in reader:
+            url = (
+                row.get("COMPANY URL") or row.get("company_url") or
+                row.get("company_website") or row.get("Website") or
+                row.get("website") or row.get("URL") or row.get("url") or ""
+            ).strip()
+            if url:
+                urls.append(url)
+    else:
+        # Plain list of URLs, one per line (no header)
+        for line in text.splitlines():
+            url = line.strip().strip('"')
+            if url:
+                urls.append(url)
+
+    if _pool and urls:
+        for url in urls:
+            await store.add_exclusion(_pool, url)
+        _exclusions[:] = await store.get_exclusions(_pool)
+    return JSONResponse({"ok": True, "imported": len(urls)})
+
+
+# ── API: email templates ───────────────────────────────────────────────────────
+
+@app.get("/api/email-templates")
+async def api_get_templates(request: Request):
+    _require_auth(request)
+    return JSONResponse(_templates)
+
+
+@app.post("/api/email-templates")
+async def api_add_template(request: Request):
+    _require_auth(request)
+    data = await request.json()
+    vertical = (data.get("vertical") or "").strip()
+    name     = (data.get("name") or "").strip()
+    subject  = (data.get("subject") or "").strip()
+    body     = (data.get("body") or "").strip()
+    if not vertical or not name or not subject or not body:
+        return JSONResponse({"error": "vertical, name, subject, and body are required"}, status_code=400)
+    if _pool:
+        t = await store.add_email_template(_pool, vertical, name, subject, body)
+        _templates.append(t)
+        return JSONResponse(t)
+    # No-DB fallback: add to in-memory cache only
+    t = {"id": len(_templates) + 1, "vertical": vertical, "name": name,
+         "subject": subject, "body": body, "created_at": None}
+    _templates.append(t)
+    return JSONResponse(t)
+
+
+@app.put("/api/email-templates/{template_id}")
+async def api_update_template(request: Request, template_id: int):
+    _require_auth(request)
+    data = await request.json()
+    vertical = (data.get("vertical") or "").strip()
+    name     = (data.get("name") or "").strip()
+    subject  = (data.get("subject") or "").strip()
+    body     = (data.get("body") or "").strip()
+    if not vertical or not name or not subject or not body:
+        return JSONResponse({"error": "vertical, name, subject, and body are required"}, status_code=400)
+    if _pool:
+        updated = await store.update_email_template(_pool, template_id, vertical, name, subject, body)
+        if not updated:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        for i, t in enumerate(_templates):
+            if t["id"] == template_id:
+                _templates[i] = updated
+                break
+        return JSONResponse(updated)
+    # No-DB fallback
+    for i, t in enumerate(_templates):
+        if t["id"] == template_id:
+            _templates[i] = {**t, "vertical": vertical, "name": name, "subject": subject, "body": body}
+            return JSONResponse(_templates[i])
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+
+@app.delete("/api/email-templates/{template_id}")
+async def api_delete_template(request: Request, template_id: int):
+    _require_auth(request)
+    if _pool:
+        await store.delete_email_template(_pool, template_id)
+    for i, t in enumerate(_templates):
+        if t["id"] == template_id:
+            _templates.pop(i)
             break
     return JSONResponse({"ok": True})
 
@@ -873,7 +1028,40 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .exclusion-empty { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; padding:6px 0; }
 .sidebar-btn.active-nav { border-color:var(--text3); color:var(--text1); }
 .leads-grid { transition: opacity 0.15s ease; }
+.lead-row.excluded { opacity:0.38; }
+.lead-row.excluded:hover { opacity:0.52; }
+.customer-badge { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; font-family:'DM Mono',monospace; background:rgba(255,255,255,0.05); color:var(--text3); border:1px solid var(--border); margin-left:7px; vertical-align:middle; letter-spacing:0.03em; }
+.import-csv-row { display:flex; align-items:center; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.import-csv-label { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; flex:1; line-height:1.5; }
 .leads-grid.rerendering { opacity: 0; }
+
+/* ── Email Templates ── */
+.tmpl-list { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; max-height:360px; overflow-y:auto; }
+.tmpl-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
+.tmpl-card-top { display:flex; align-items:flex-start; gap:10px; }
+.tmpl-vertical-badge { font-size:9px; font-family:'DM Mono',monospace; padding:2px 7px; border-radius:3px; font-weight:600; background:rgba(96,165,250,0.12); color:#60a5fa; border:1px solid rgba(96,165,250,0.2); white-space:nowrap; flex-shrink:0; margin-top:1px; }
+.tmpl-info { flex:1; min-width:0; }
+.tmpl-name { font-size:12px; font-weight:600; color:var(--text1); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tmpl-subject { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tmpl-actions { display:flex; gap:4px; flex-shrink:0; }
+.tmpl-btn { background:none; border:none; color:var(--text3); cursor:pointer; font-size:12px; padding:2px 5px; line-height:1; border-radius:4px; transition:all 0.15s; font-family:'DM Mono',monospace; }
+.tmpl-btn:hover { color:var(--text1); background:var(--bg2); }
+.tmpl-btn.del:hover { color:var(--red); background:var(--red-bg); }
+.tmpl-btn.copied { color:var(--green); }
+.tmpl-edit-form { display:none; flex-direction:column; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.tmpl-edit-form.open { display:flex; }
+.tmpl-empty { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; padding:6px 0; }
+.tmpl-add-form { border-top:1px solid var(--border); margin-top:6px; padding-top:16px; display:none; flex-direction:column; gap:10px; }
+.tmpl-add-form.open { display:flex; }
+.tmpl-form-row { display:flex; flex-direction:column; gap:4px; }
+.tmpl-form-label { font-size:10px; font-family:'DM Mono',monospace; color:var(--text3); letter-spacing:0.06em; text-transform:uppercase; }
+.tmpl-form-input { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:7px 10px; color:var(--text1); font-family:'DM Mono',monospace; font-size:12px; }
+.tmpl-form-input:focus { outline:none; border-color:var(--text3); }
+select.tmpl-form-input { appearance:none; cursor:pointer; }
+.tmpl-form-textarea { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:8px 10px; color:var(--text1); font-family:'DM Mono',monospace; font-size:11px; resize:vertical; min-height:140px; line-height:1.55; }
+.tmpl-form-textarea:focus { outline:none; border-color:var(--text3); }
+.tmpl-form-hint { font-size:10px; color:var(--text3); font-family:'DM Mono',monospace; }
+.tmpl-form-actions { display:flex; gap:8px; }
 </style>
 </head>
 <body>
@@ -1087,13 +1275,57 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
       <!-- Exclusion List -->
       <div class="settings-section">
         <div class="settings-section-title">Exclusion List</div>
-        <div class="settings-section-sub">Companies or people already customers — excluded from Instantly emails. Enter a company name or person name.</div>
+        <div class="settings-section-sub">Add company website URLs of existing customers (e.g. <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">imagineart.io</code>). Matched leads are greyed out in results and never sent to Instantly.</div>
         <div class="exclusion-add-row">
-          <input type="text" class="exclusion-input" id="exclusion-input" placeholder="e.g. ImagineArt or John Smith…" onkeydown="if(event.key==='Enter') addExclusion()">
+          <input type="text" class="exclusion-input" id="exclusion-input" placeholder="e.g. imagineart.io or https://veed.io" onkeydown="if(event.key==='Enter') addExclusion()">
           <button class="settings-save-btn" onclick="addExclusion()">Add</button>
         </div>
         <div class="exclusion-list" id="exclusion-list">
           <div class="exclusion-empty">No exclusions yet.</div>
+        </div>
+        <div class="import-csv-row">
+          <span class="import-csv-label">Bulk import from Trigify CSV — reads the COMPANY URL column automatically</span>
+          <input type="file" id="exclusion-csv-input" accept=".csv" style="display:none" onchange="importExclusionCsv(this)">
+          <button class="settings-save-btn" id="import-csv-btn" onclick="document.getElementById('exclusion-csv-input').click()">Import CSV</button>
+        </div>
+      </div>
+
+      <!-- Email Templates -->
+      <div class="settings-section" style="max-width:600px;">
+        <div class="settings-section-title">Email Templates</div>
+        <div class="settings-section-sub">Templates are selected automatically based on the lead's industry vertical. Use <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{first_name}</code> and <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{company}</code> as placeholders.</div>
+        <div class="tmpl-list" id="tmpl-list"><div class="tmpl-empty">Loading...</div></div>
+        <button class="settings-save-btn" id="tmpl-add-btn" onclick="toggleTmplForm()">+ Add template</button>
+        <div class="tmpl-add-form" id="tmpl-add-form">
+          <div class="tmpl-form-row">
+            <label class="tmpl-form-label">Vertical</label>
+            <select class="tmpl-form-input" id="tmpl-vertical">
+              <option value="ai_tools">AI Tools</option>
+              <option value="film_production">Film Production</option>
+              <option value="vfx_production">VFX Production</option>
+              <option value="animation">Animation</option>
+              <option value="short_drama">Short Drama</option>
+              <option value="ecommerce">Ecommerce</option>
+              <option value="ai_generic">AI Generic</option>
+            </select>
+          </div>
+          <div class="tmpl-form-row">
+            <label class="tmpl-form-label">Template name</label>
+            <input type="text" class="tmpl-form-input" id="tmpl-name" placeholder="e.g. Film Production – Version B">
+          </div>
+          <div class="tmpl-form-row">
+            <label class="tmpl-form-label">Subject</label>
+            <input type="text" class="tmpl-form-input" id="tmpl-subject" placeholder="e.g. Seedance 2.0 + {company}?">
+          </div>
+          <div class="tmpl-form-row">
+            <label class="tmpl-form-label">Body</label>
+            <textarea class="tmpl-form-textarea" id="tmpl-body" placeholder="Hi {first_name},&#10;&#10;...&#10;&#10;-- Antti"></textarea>
+            <span class="tmpl-form-hint">Use {first_name} and {company} for personalisation. For images, paste a public URL inline (e.g. https://example.com/image.png).</span>
+          </div>
+          <div class="tmpl-form-actions">
+            <button class="settings-save-btn" onclick="saveTmpl()">Save template</button>
+            <button class="settings-save-btn" onclick="toggleTmplForm()" style="color:var(--text3)">Cancel</button>
+          </div>
         </div>
       </div>
     </main>
@@ -1102,12 +1334,13 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
-let allLeads      = [];
-let allRuns       = [];
-let emailPreviews = {};
-let appSettings   = { qualified_threshold: 70, disqualified_threshold: 60 };
-let exclusions    = [];
-let currentRunId  = null;
+let allLeads       = [];
+let allRuns        = [];
+let emailPreviews  = {};
+let appSettings    = { qualified_threshold: 70, disqualified_threshold: 60 };
+let exclusions     = [];
+let emailTemplates = [];
+let currentRunId   = null;
 let selectedFile  = null;
 let concurrency   = 10;
 let currentFilter = 'all';
@@ -1568,12 +1801,13 @@ function renderRow(l, i) {
     </div>`;
   })() : '';
 
+  const customerBadge = l.excluded ? '<span class="customer-badge">existing customer</span>' : '';
   return `
-    <div class="lead-row" id="lr-${i}" data-render-index="${i}">
+    <div class="lead-row${l.excluded ? ' excluded' : ''}" id="lr-${i}" data-render-index="${i}">
       <div class="lead-summary" onclick="toggle(${i})">
         <div class="avatar" style="background:${abg};color:${afg}">${initials(l.name)}</div>
         <div>
-          <div class="lead-name">${l.name}</div>
+          <div class="lead-name">${l.name}${customerBadge}</div>
           <div class="lead-company">${companyMeta}</div>
           ${(industryMeta || companySizeMeta) ? `<div class="lead-company-extra">${[industryMeta, companySizeMeta].filter(Boolean).join(' · ')}</div>` : ''}
         </div>
@@ -1708,15 +1942,18 @@ async function confirmSendEmails() {
 // ── Settings ───────────────────────────────────────────────────────────────────
 
 async function openSettings() {
-  const [s, excl] = await Promise.all([
+  const [s, excl, tmpls] = await Promise.all([
     fetch('/api/settings').then(r => r.json()).catch(() => appSettings),
     fetch('/api/exclusions').then(r => r.json()).catch(() => []),
+    fetch('/api/email-templates').then(r => r.json()).catch(() => []),
   ]);
   appSettings = s;
   exclusions  = excl;
+  emailTemplates = tmpls;
   document.getElementById('input-qual-threshold').value = s.qualified_threshold;
   document.getElementById('input-dis-threshold').value  = s.disqualified_threshold;
   renderExclusions();
+  renderTemplates();
   show('s-settings');
 }
 
@@ -1786,6 +2023,30 @@ function renderExclusions() {
   ).join('');
 }
 
+async function importExclusionCsv(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const btn = document.getElementById('import-csv-btn');
+  btn.textContent = 'Importing…';
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/exclusions/import', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (resp.ok) {
+      exclusions = await fetch('/api/exclusions').then(r => r.json());
+      renderExclusions();
+      btn.textContent = `✓ Imported ${data.imported}`;
+      btn.classList.add('saved');
+      setTimeout(() => { btn.textContent = 'Import CSV'; btn.classList.remove('saved'); }, 3000);
+    }
+  } finally {
+    btn.disabled = false;
+    input.value = '';
+  }
+}
+
 async function addExclusion() {
   const input = document.getElementById('exclusion-input');
   const value = input.value.trim();
@@ -1804,6 +2065,143 @@ async function removeExclusion(id) {
   await fetch('/api/exclusions/' + id, { method: 'DELETE' });
   exclusions = exclusions.filter(e => e.id !== id);
   renderExclusions();
+}
+
+// ── Email Templates ────────────────────────────────────────────────────────────
+
+const VERTICAL_LABELS = {
+  ai_tools: 'AI Tools', film_production: 'Film Production',
+  vfx_production: 'VFX Production', animation: 'Animation',
+  short_drama: 'Short Drama', ecommerce: 'Ecommerce', ai_generic: 'AI Generic',
+};
+
+const VERTICAL_OPTIONS = ['ai_tools','film_production','vfx_production','animation','short_drama','ecommerce','ai_generic'];
+
+function renderTemplates() {
+  const list = document.getElementById('tmpl-list');
+  if (!list) return;
+  if (!emailTemplates.length) {
+    list.innerHTML = '<div class="tmpl-empty">No templates yet.</div>';
+    return;
+  }
+  list.innerHTML = emailTemplates.map(t => {
+    const vOpts = VERTICAL_OPTIONS.map(v =>
+      `<option value="${v}"${v===t.vertical?' selected':''}>${VERTICAL_LABELS[v]||v}</option>`
+    ).join('');
+    return `
+    <div class="tmpl-card" id="tmpl-card-${t.id}">
+      <div class="tmpl-card-top">
+        <span class="tmpl-vertical-badge">${VERTICAL_LABELS[t.vertical] || t.vertical}</span>
+        <div class="tmpl-info">
+          <div class="tmpl-name">${t.name}</div>
+          <div class="tmpl-subject">${t.subject}</div>
+        </div>
+        <div class="tmpl-actions">
+          <button class="tmpl-btn" onclick="copyTmpl(${t.id}, this)" title="Copy subject + body">Copy</button>
+          <button class="tmpl-btn" onclick="toggleEditTmpl(${t.id})" title="Edit template">Edit</button>
+          <button class="tmpl-btn del" onclick="deleteTmpl(${t.id})" title="Delete template">Del</button>
+        </div>
+      </div>
+      <div class="tmpl-edit-form" id="tmpl-edit-${t.id}">
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Vertical</label>
+          <select class="tmpl-form-input" id="tmpl-edit-vertical-${t.id}">${vOpts}</select>
+        </div>
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Template name</label>
+          <input type="text" class="tmpl-form-input" id="tmpl-edit-name-${t.id}" value="${t.name.replace(/"/g,'&quot;')}">
+        </div>
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Subject</label>
+          <input type="text" class="tmpl-form-input" id="tmpl-edit-subject-${t.id}" value="${t.subject.replace(/"/g,'&quot;')}">
+        </div>
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Body</label>
+          <textarea class="tmpl-form-textarea" id="tmpl-edit-body-${t.id}">${t.body.replace(/</g,'&lt;')}</textarea>
+        </div>
+        <div class="tmpl-form-actions">
+          <button class="settings-save-btn" onclick="updateTmpl(${t.id})">Save changes</button>
+          <button class="settings-save-btn" onclick="toggleEditTmpl(${t.id})" style="color:var(--text3)">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleEditTmpl(id) {
+  const form = document.getElementById('tmpl-edit-' + id);
+  form.classList.toggle('open');
+}
+
+async function updateTmpl(id) {
+  const vertical = document.getElementById('tmpl-edit-vertical-' + id).value;
+  const name     = document.getElementById('tmpl-edit-name-' + id).value.trim();
+  const subject  = document.getElementById('tmpl-edit-subject-' + id).value.trim();
+  const body     = document.getElementById('tmpl-edit-body-' + id).value.trim();
+  if (!name || !subject || !body) { alert('Name, subject, and body are required.'); return; }
+  const resp = await fetch('/api/email-templates/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vertical, name, subject, body }),
+  });
+  if (!resp.ok) { alert('Failed to update template.'); return; }
+  const updated = await resp.json();
+  const idx = emailTemplates.findIndex(t => t.id === id);
+  if (idx !== -1) emailTemplates[idx] = updated;
+  renderTemplates();
+}
+
+function copyTmpl(id, btn) {
+  const t = emailTemplates.find(t => t.id === id);
+  if (!t) return;
+  const text = 'Subject: ' + t.subject + '\\n\\n' + t.body;
+  const prev = btn.textContent;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => { btn.textContent = '✓'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500); });
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✓'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500);
+  }
+}
+
+function toggleTmplForm() {
+  const form = document.getElementById('tmpl-add-form');
+  const btn  = document.getElementById('tmpl-add-btn');
+  const open = form.classList.toggle('open');
+  btn.textContent = open ? '− Cancel' : '+ Add template';
+  if (open) {
+    document.getElementById('tmpl-name').value    = '';
+    document.getElementById('tmpl-subject').value = '';
+    document.getElementById('tmpl-body').value    = '';
+  }
+}
+
+async function saveTmpl() {
+  const vertical = document.getElementById('tmpl-vertical').value;
+  const name     = document.getElementById('tmpl-name').value.trim();
+  const subject  = document.getElementById('tmpl-subject').value.trim();
+  const body     = document.getElementById('tmpl-body').value.trim();
+  if (!name || !subject || !body) { alert('Name, subject, and body are required.'); return; }
+  const resp = await fetch('/api/email-templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vertical, name, subject, body }),
+  });
+  if (!resp.ok) { alert('Failed to save template.'); return; }
+  const t = await resp.json();
+  emailTemplates.push(t);
+  renderTemplates();
+  toggleTmplForm();
+}
+
+async function deleteTmpl(id) {
+  if (!confirm('Delete this template?')) return;
+  await fetch('/api/email-templates/' + id, { method: 'DELETE' });
+  emailTemplates = emailTemplates.filter(t => t.id !== id);
+  renderTemplates();
 }
 
 async function boot() {

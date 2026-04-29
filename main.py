@@ -27,6 +27,7 @@ load_dotenv()
 
 import config
 from llm import LiteLLMClient
+from llm.client import configure_ssl
 from normalization import normalize_batch, LeadInput
 from normalization.csv_loader import load_csv
 from tools import enrich_lead, EnrichedLead
@@ -192,6 +193,8 @@ async def run_batch(
         raise RuntimeError("LLM_API_KEY environment variable is not set")
     if not config.LLM_MODEL:
         raise RuntimeError("LLM_MODEL environment variable is not set")
+
+    configure_ssl(config.LLM_SSL_VERIFY)
 
     stats = RunStats()
     sem   = asyncio.Semaphore(concurrency)

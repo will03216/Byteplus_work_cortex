@@ -5,11 +5,17 @@ LiteLLM-backed client wrapper for provider-agnostic text generation.
 from dataclasses import dataclass
 from typing import Any, Optional, List, Dict
 
+import litellm
 from litellm import acompletion
 
 
 class LLMError(RuntimeError):
     """Raised when the upstream LLM call fails or returns an invalid payload."""
+
+
+def configure_ssl(ssl_verify: bool) -> None:
+    """Apply global SSL verification setting to litellm."""
+    litellm.ssl_verify = ssl_verify
 
 
 @dataclass

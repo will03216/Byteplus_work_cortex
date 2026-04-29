@@ -10,6 +10,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_API_BASE: ${LLM_API_BASE:-}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+      LLM_SSL_VERIFY: ${LLM_SSL_VERIFY:-true}
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-admin}
+      SESSION_SECRET: ${SESSION_SECRET:-local-dev-secret}
     volumes:
       # Temp run files survive app restarts; DB is the source of truth
       - run_data:/app/output/runs

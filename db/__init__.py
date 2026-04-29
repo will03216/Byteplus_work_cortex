@@ -16,6 +16,11 @@ from .store import (
     get_exclusions,
     add_exclusion,
     remove_exclusion,
+    seed_email_templates,
+    get_email_templates,
+    add_email_template,
+    update_email_template,
+    delete_email_template,
 )
 
 __all__ = [
@@ -25,4 +30,5 @@ __all__ = [
     "update_run_email_status", "mark_leads_email_sent", "get_leads_for_email",
     "get_settings", "save_settings",
     "get_exclusions", "add_exclusion", "remove_exclusion",
+    "seed_email_templates", "get_email_templates", "add_email_template", "update_email_template", "delete_email_template",
 ]
