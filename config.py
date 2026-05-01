@@ -18,6 +18,11 @@ def _normalize_model_name(raw_model: str) -> str:
     return raw_model
 
 
+# ── Apollo.io enrichment ─────────────────────────────────────────────────────
+APOLLO_ENABLED      = os.getenv("APOLLO_ENABLED", "false").lower() in ("true", "1", "yes")
+APOLLO_API_KEY      = os.getenv("APOLLO_API_KEY") or None
+APOLLO_TIMEOUT      = int(os.getenv("APOLLO_TIMEOUT_SECONDS", "10"))
+
 # ── LLM ─────────────────────────────────────────────────────────────────────
 DEFAULT_LLM_MODEL   = "anthropic/claude-haiku-4-5-20251001"
 LLM_PROVIDER        = os.getenv("LLM_PROVIDER") or None

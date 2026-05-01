@@ -2,6 +2,7 @@
 LiteLLM-backed client wrapper for provider-agnostic text generation.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any, Optional, List, Dict
 
@@ -16,6 +17,10 @@ class LLMError(RuntimeError):
 def configure_ssl(ssl_verify: bool) -> None:
     """Apply global SSL verification setting to litellm."""
     litellm.ssl_verify = ssl_verify
+
+
+# Apply SSL setting at import time so all litellm calls respect LLM_SSL_VERIFY
+configure_ssl(os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no"))
 
 
 @dataclass

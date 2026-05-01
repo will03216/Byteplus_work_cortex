@@ -13,11 +13,13 @@ v2 extension for LinkedIn: replace fetch logic with Proxycurl API call
 ($0.01/call) for reliable structured data on all profiles.
 """
 
+import os
 import re
 import httpx
 from bs4 import BeautifulSoup
 
 _TIMEOUT = 10  # seconds per request
+_SSL_VERIFY = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 _MAX_CHARS = 1500  # max text returned per source — enough context, won't bloat prompt
 
 # Headers that avoid the most aggressive bot blocks
@@ -55,6 +57,7 @@ async def scrape_company_website(domain: str) -> str:
                 timeout=_TIMEOUT,
                 headers=_HEADERS,
                 follow_redirects=True,
+                verify=_SSL_VERIFY,
             ) as client:
                 resp = await client.get(url)
                 if resp.status_code >= 400:
@@ -137,6 +140,7 @@ async def scrape_linkedin_profile(linkedin_url: str) -> str:
             timeout=_TIMEOUT,
             headers=_HEADERS,
             follow_redirects=True,
+            verify=_SSL_VERIFY,
         ) as client:
             resp = await client.get(url)
 

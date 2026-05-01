@@ -21,6 +21,7 @@ from typing import Optional
 
 import secrets
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -281,29 +282,34 @@ def _build_email(lead: dict) -> dict:
 
 
 async def _send_to_instantly(leads: list) -> dict:
-    payload = {
-        "api_key":               INSTANTLY_API_KEY,
-        "campaign_id":           INSTANTLY_CAMPAIGN_ID,
-        "skip_if_in_workspace":  True,
-        "leads": [
-            {
-                "email":         lead.get("email") or PLACEHOLDER_EMAIL,
-                "first_name":    (lead.get("name") or "").split()[0],
-                "last_name":     " ".join((lead.get("name") or "").split()[1:]),
-                "company_name":  lead.get("company") or "",
-                "website":       lead.get("company_website") or "",
+    ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+    results = []
+    async with httpx.AsyncClient(
+        timeout=30,
+        verify=ssl_verify,
+        headers={"Authorization": f"Bearer {INSTANTLY_API_KEY}"},
+    ) as client:
+        for lead in leads:
+            name = (lead.get("name") or "").strip()
+            parts = name.split(None, 1)
+            payload = {
+                "email":           lead.get("email") or PLACEHOLDER_EMAIL,
+                "first_name":      parts[0] if parts else "",
+                "last_name":       parts[1] if len(parts) > 1 else "",
+                "company_name":    lead.get("company") or "",
+                "website":         lead.get("company_website") or "",
                 "personalization": _build_email(lead)["body"],
+                "campaign_id":     INSTANTLY_CAMPAIGN_ID,
             }
-            for lead in leads
-        ],
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.instantly.ai/api/v1/lead/add",
-            json=payload,
-        )
-        resp.raise_for_status()
-        return resp.json()
+            resp = await client.post("https://api.instantly.ai/api/v2/leads", json=payload)
+            if not resp.is_success:
+                logger.error(
+                    "Instantly API error %d for %s: %s",
+                    resp.status_code, payload["email"], resp.text,
+                )
+                resp.raise_for_status()
+            results.append(resp.json())
+    return {"leads_sent": len(results)}
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -533,7 +539,10 @@ async def send_emails(request: Request, run_id: str):
     if not eligible:
         return JSONResponse({"sent": 0, "message": "No eligible leads to send"})
 
-    await _send_to_instantly(eligible)
+    try:
+        await _send_to_instantly(eligible)
+    except Exception as exc:
+        return JSONResponse({"error": f"Instantly API error: {exc}"}, status_code=502)
 
     lead_ids = [l["lead_id"] for l in eligible]
     await store.mark_leads_email_sent(_pool, run_id, lead_ids)

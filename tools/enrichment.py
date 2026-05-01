@@ -2,12 +2,12 @@
 Tool enrichment layer.
 
 Python orchestrates all tool calls — Claude never calls tools directly.
-Each function is a stub or live implementation designed for easy extension.
 
-Extension points:
-  - get_company_profile  → Apollo.io / Clearbit / PDL
-  - get_recent_signals   → Trigify enrichment API
-  - scrape_company_website / scrape_linkedin_profile → see web_enrichment.py
+Enrichment sources (in order of richness):
+  - Apollo.io          → company profile, funding, tech stack (via apollo_client)
+  - Web scraping       → company homepage summary (see web_enrichment.py)
+  - LinkedIn scraping  → public profile / tenure signals (see web_enrichment.py)
+  - Local heuristic    → role seniority from title keywords
 """
 
 import asyncio
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from normalization.normalizer import LeadInput
 from tools.web_enrichment import scrape_company_website, scrape_linkedin_profile
+from tools.apollo_client import fetch_company
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,11 @@ logger = logging.getLogger(__name__)
 # ── Enrichment models ────────────────────────────────────────────────────────
 
 class CompanyProfile(BaseModel):
-    description:    Optional[str] = None
-    industry:       Optional[str] = None
-    company_size:   Optional[str] = None   # e.g. "51-200", "1000+"
+    description:       Optional[str] = None
+    industry:          Optional[str] = None
+    company_size:      Optional[str] = None   # e.g. "51-200", "1001+"
+    funding_stage:     Optional[str] = None   # e.g. "Series A", "Seed"
+    total_funding_usd: Optional[int] = None   # raw USD integer
 
 
 class RecentSignals(BaseModel):
@@ -44,31 +47,75 @@ class EnrichedLead(BaseModel):
     linkedin_summary:        str             = ""   # scraped LinkedIn profile text
 
 
-# ── Individual tool stubs ────────────────────────────────────────────────────
+# ── Apollo response parsers ───────────────────────────────────────────────────
 
-def get_company_profile(domain: str) -> CompanyProfile:
-    """
-    Stub: returns empty profile.
-    v2: replace body with Apollo.io / Clearbit call.
-    """
-    logger.debug("get_company_profile(domain=%s) — stub, returning empty", domain)
-    return CompanyProfile()
+def _employee_range(count: Optional[int]) -> Optional[str]:
+    if not count:
+        return None
+    if count <= 10:    return "1-10"
+    if count <= 50:    return "11-50"
+    if count <= 200:   return "51-200"
+    if count <= 500:   return "201-500"
+    if count <= 1000:  return "501-1000"
+    return "1001+"
 
 
-def get_recent_signals(company_name: str) -> RecentSignals:
-    """
-    Stub: returns empty signals.
-    v2: replace body with Trigify enrichment API or LinkedIn scraper.
-    """
-    logger.debug("get_recent_signals(company=%s) — stub, returning empty", company_name)
-    return RecentSignals()
+def _parse_company_profile(data: dict) -> CompanyProfile:
+    if not data:
+        return CompanyProfile()
+
+    headcount = data.get("employee_count") or data.get("estimated_num_employees")
+
+    return CompanyProfile(
+        description       = data.get("short_description") or data.get("long_description") or None,
+        industry          = data.get("industry") or None,
+        company_size      = _employee_range(headcount),
+        funding_stage     = data.get("latest_funding_round_type") or None,
+        total_funding_usd = data.get("total_funding") or None,
+    )
+
+
+def _parse_recent_signals(data: dict) -> RecentSignals:
+    if not data:
+        return RecentSignals()
+
+    recent_activity: list[str] = []
+    hiring_signals:  list[str] = []
+
+    # Funding events → recent_activity
+    for ev in (data.get("funding_events") or [])[:3]:
+        parts = []
+        round_type = ev.get("type") or ""
+        amount     = ev.get("amount")
+        date       = (ev.get("date") or "")[:7]   # YYYY-MM
+        if round_type:
+            parts.append(round_type)
+        if amount:
+            parts.append(f"${amount:,}")
+        if date:
+            parts.append(f"({date})")
+        if parts:
+            recent_activity.append("Funding: " + " ".join(parts))
+
+    # Tech/product keywords → hiring_signals as context
+    keywords = data.get("keywords") or []
+    relevant = [
+        k for k in keywords
+        if any(w in k.lower() for w in ["ai", "video", "creative", "content", "animation", "media"])
+    ]
+    if relevant:
+        hiring_signals.append("Company keywords: " + ", ".join(relevant[:6]))
+
+    return RecentSignals(
+        recent_activity = recent_activity,
+        hiring_signals  = hiring_signals,
+        product_updates = [],
+    )
 
 
 def get_role_seniority(title: str) -> str:
     """
-    Lightweight local heuristic for v1.
-    v2: replace with Apollo.io people API or PDL.
-
+    Lightweight local heuristic.
     Returns: "senior" | "mid" | "junior" | "unknown"
     """
     lower = title.lower()
@@ -103,43 +150,29 @@ def get_role_seniority(title: str) -> str:
 
 async def enrich_lead(lead: LeadInput) -> EnrichedLead:
     """
-    Runs enrichment tools concurrently — only when the relevant field is present.
-
-    Web scraping (company website + LinkedIn) is performed in parallel via
-    asyncio.gather so both network fetches happen simultaneously.
-    All enrichment is best-effort: any failure returns empty string and the
-    pipeline continues with whatever data is available.
+    Runs all enrichment concurrently — Apollo.io, website, and LinkedIn fetches
+    happen in parallel via asyncio.gather. All sources are best-effort: any
+    failure returns an empty model and the pipeline continues with whatever
+    data is available.
     """
-    # Company profile: stub (only fetch when we have a domain to look up)
-    company_profile = (
-        get_company_profile(lead.company_domain)
-        if lead.company_domain
-        else CompanyProfile()
-    )
-
-    # Recent signals: stub (only fetch when we have a company name to query)
-    recent_signals = (
-        get_recent_signals(lead.company_name)
-        if lead.company_name
-        else RecentSignals()
-    )
-
-    # Role seniority: local heuristic, no external call — always run
     role_seniority = get_role_seniority(lead.title)
 
-    # Web enrichment: scrape company website + LinkedIn profile concurrently
-    website_task = scrape_company_website(lead.company_domain or "")
-    linkedin_task = scrape_linkedin_profile(lead.linkedin_url or "")
-    company_website_summary, linkedin_summary = await asyncio.gather(
-        website_task,
-        linkedin_task,
-        return_exceptions=False,  # failures handled inside each scraper
+    # All three network sources run in parallel
+    apollo_data, company_website_summary, linkedin_summary = await asyncio.gather(
+        fetch_company(lead.company_domain or "", lead.company_name),
+        scrape_company_website(lead.company_domain or ""),
+        scrape_linkedin_profile(lead.linkedin_url or ""),
     )
 
+    company_profile = _parse_company_profile(apollo_data)
+    recent_signals  = _parse_recent_signals(apollo_data)
+
     logger.debug(
-        "Enriched lead_id=%s | seniority=%s | website_chars=%d | linkedin_chars=%d",
+        "Enriched lead_id=%s | seniority=%s | apollo=%s | size=%s | website_chars=%d | linkedin_chars=%d",
         lead.lead_id,
         role_seniority,
+        "hit" if apollo_data else "miss",
+        company_profile.company_size or "unknown",
         len(company_website_summary),
         len(linkedin_summary),
     )
