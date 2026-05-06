@@ -1,6 +1,6 @@
 services:
   app:
-    image: ${CR_REGISTRY}/${CR_NAMESPACE}/${CR_REPO}:latest
+    image: ghcr.io/mittulmadaan/lead-generation-engine-v1:latest
     ports:
       - "80:8080"
     environment:

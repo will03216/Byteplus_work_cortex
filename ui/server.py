@@ -45,7 +45,7 @@ _jobs: dict = {}
 _pool = None
 
 # ── Settings, exclusions, and template cache (loaded from DB at startup) ───────
-_settings: dict = {"qualified_threshold": 70, "disqualified_threshold": 60}
+_settings: dict = {"qualified_threshold": 70, "disqualified_threshold": 60, "apollo_enabled": False}
 _exclusions: list = []
 _templates: list = []  # all email_templates rows, refreshed on add/delete
 
@@ -74,6 +74,8 @@ async def lifespan(app: FastAPI):
             s = await store.get_settings(_pool)
             _settings["qualified_threshold"]    = int(s.get("qualified_threshold", 70))
             _settings["disqualified_threshold"] = int(s.get("disqualified_threshold", 60))
+            _settings["apollo_enabled"]         = s.get("apollo_enabled", "false").lower() in ("true", "1", "yes")
+            os.environ["APOLLO_ENABLED"] = "true" if _settings["apollo_enabled"] else "false"
             _exclusions[:] = await store.get_exclusions(_pool)
             await store.seed_email_templates(_pool)
             _templates[:] = await store.get_email_templates(_pool)
@@ -574,10 +576,17 @@ async def api_save_settings(request: Request):
     dt = int(body.get("disqualified_threshold", 60))
     if dt >= qt:
         return JSONResponse({"error": "Review threshold must be below qualified threshold"}, status_code=400)
+    apollo = bool(body.get("apollo_enabled", _settings.get("apollo_enabled", False)))
     if _pool:
-        await store.save_settings(_pool, {"qualified_threshold": str(qt), "disqualified_threshold": str(dt)})
+        await store.save_settings(_pool, {
+            "qualified_threshold": str(qt),
+            "disqualified_threshold": str(dt),
+            "apollo_enabled": "true" if apollo else "false",
+        })
     _settings["qualified_threshold"]    = qt
     _settings["disqualified_threshold"] = dt
+    _settings["apollo_enabled"]         = apollo
+    os.environ["APOLLO_ENABLED"] = "true" if apollo else "false"
     return JSONResponse({"ok": True})
 
 
@@ -1029,7 +1038,16 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 /* ── Settings screen ── */
 .settings-shell { display:grid; grid-template-columns:220px 1fr; height:100vh; overflow:hidden; }
 .settings-main { overflow-y:auto; padding:32px 36px; }
-.settings-section { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:18px; max-width:540px; }
+.settings-section { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:24px; }
+/* ── Settings tabs ── */
+.stab-bar { display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:0; }
+.stab { padding:8px 16px; border-radius:8px 8px 0 0; font-size:12px; font-family:'DM Mono',monospace; font-weight:600; color:var(--text3); background:none; border:1px solid transparent; border-bottom:none; cursor:pointer; transition:all 0.15s; margin-bottom:-1px; }
+.stab:hover { color:var(--text2); }
+.stab.active { color:var(--text1); background:var(--bg2); border-color:var(--border); border-bottom-color:var(--bg2); }
+.stab-panel { display:none; }
+.stab-panel.active { display:block; }
+.settings-two-col { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+.settings-col { display:flex; flex-direction:column; gap:18px; }
 .settings-section-title { font-size:14px; font-weight:700; font-family:'Syne',sans-serif; margin-bottom:4px; }
 .settings-section-sub { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; margin-bottom:20px; line-height:1.6; }
 .threshold-row { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
@@ -1063,7 +1081,7 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
 
 /* ── Email Templates ── */
-.tmpl-list { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; max-height:360px; overflow-y:auto; }
+.tmpl-list { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; max-height:none; overflow-y:visible; }
 .tmpl-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
 .tmpl-card-top { display:flex; align-items:flex-start; gap:10px; }
 .tmpl-vertical-badge { font-size:9px; font-family:'DM Mono',monospace; padding:2px 7px; border-radius:3px; font-weight:600; background:rgba(96,165,250,0.12); color:#60a5fa; border:1px solid rgba(96,165,250,0.2); white-space:nowrap; flex-shrink:0; margin-top:1px; }
@@ -1085,10 +1103,23 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .tmpl-form-input { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:7px 10px; color:var(--text1); font-family:'DM Mono',monospace; font-size:12px; }
 .tmpl-form-input:focus { outline:none; border-color:var(--text3); }
 select.tmpl-form-input { appearance:none; cursor:pointer; }
-.tmpl-form-textarea { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:8px 10px; color:var(--text1); font-family:'DM Mono',monospace; font-size:11px; resize:vertical; min-height:140px; line-height:1.55; }
+.tmpl-form-textarea { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:10px 12px; color:var(--text1); font-family:'DM Mono',monospace; font-size:12px; resize:vertical; min-height:260px; line-height:1.65; width:100%; box-sizing:border-box; }
 .tmpl-form-textarea:focus { outline:none; border-color:var(--text3); }
 .tmpl-form-hint { font-size:10px; color:var(--text3); font-family:'DM Mono',monospace; }
 .tmpl-form-actions { display:flex; gap:8px; }
+/* ── Toggle switch ── */
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; }
+.toggle-label { font-size:13px; color:var(--text1); font-family:'DM Mono',monospace; }
+.toggle-sub { font-size:11px; color:var(--text3); font-family:'DM Mono',monospace; margin-top:2px; line-height:1.5; }
+.toggle-switch { position:relative; width:42px; height:24px; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--bg3); border:1px solid var(--border2); border-radius:24px; transition:all 0.2s; }
+.toggle-slider:before { content:''; position:absolute; width:16px; height:16px; left:3px; top:3px; background:var(--text3); border-radius:50%; transition:all 0.2s; }
+.toggle-switch input:checked + .toggle-slider { background:rgba(74,222,128,0.15); border-color:var(--green); }
+.toggle-switch input:checked + .toggle-slider:before { background:var(--green); transform:translateX(18px); }
+.apollo-status { font-size:11px; font-family:'DM Mono',monospace; margin-top:6px; }
+.apollo-status.on  { color:var(--green); }
+.apollo-status.off { color:var(--text3); }
 </style>
 </head>
 <body>
@@ -1295,78 +1326,116 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
         <div class="page-meta">Pipeline configuration</div>
       </div>
 
-      <!-- Score Thresholds -->
-      <div class="settings-section">
-        <div class="settings-section-title">Score Thresholds</div>
-        <div class="settings-section-sub">Leads are reclassified instantly using your saved thresholds — no need to re-run the pipeline.</div>
-        <div class="threshold-row">
-          <span class="threshold-label">Qualified if score ≥</span>
-          <input type="number" class="threshold-input" id="input-qual-threshold" min="1" max="100" value="70">
-        </div>
-        <div class="threshold-row">
-          <span class="threshold-label">Review if score ≥</span>
-          <input type="number" class="threshold-input" id="input-dis-threshold" min="1" max="100" value="60">
-          <span class="threshold-hint">below this = disqualified</span>
-        </div>
-        <button class="settings-save-btn" id="save-thresholds-btn" onclick="saveThresholds()">Save thresholds</button>
+      <!-- Tab bar -->
+      <div class="stab-bar">
+        <button class="stab active" id="stab-pipeline"    onclick="switchSettingsTab('pipeline')">Pipeline</button>
+        <button class="stab"        id="stab-exclusions"  onclick="switchSettingsTab('exclusions')">Exclusions</button>
+        <button class="stab"        id="stab-templates"   onclick="switchSettingsTab('templates')">Email Templates</button>
       </div>
 
-      <!-- Exclusion List -->
-      <div class="settings-section">
-        <div class="settings-section-title">Exclusion List</div>
-        <div class="settings-section-sub">Add company website URLs of existing customers (e.g. <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">imagineart.io</code>). Matched leads are greyed out in results and never sent to Instantly.</div>
-        <div class="exclusion-add-row">
-          <input type="text" class="exclusion-input" id="exclusion-input" placeholder="e.g. imagineart.io or https://veed.io" onkeydown="if(event.key==='Enter') addExclusion()">
-          <button class="settings-save-btn" onclick="addExclusion()">Add</button>
-        </div>
-        <div class="exclusion-list" id="exclusion-list">
-          <div class="exclusion-empty">No exclusions yet.</div>
-        </div>
-        <div class="import-csv-row">
-          <span class="import-csv-label">Bulk import from Trigify CSV — reads the COMPANY URL column automatically</span>
-          <input type="file" id="exclusion-csv-input" accept=".csv" style="display:none" onchange="importExclusionCsv(this)">
-          <button class="settings-save-btn" id="import-csv-btn" onclick="document.getElementById('exclusion-csv-input').click()">Import CSV</button>
+      <!-- Tab: Pipeline -->
+      <div class="stab-panel active" id="stab-panel-pipeline">
+        <div class="settings-two-col">
+          <div class="settings-col">
+            <!-- Score Thresholds -->
+            <div class="settings-section">
+              <div class="settings-section-title">Score Thresholds</div>
+              <div class="settings-section-sub">Leads are reclassified instantly using your saved thresholds — no need to re-run the pipeline.</div>
+              <div class="threshold-row">
+                <span class="threshold-label">Qualified if score ≥</span>
+                <input type="number" class="threshold-input" id="input-qual-threshold" min="1" max="100" value="70">
+              </div>
+              <div class="threshold-row">
+                <span class="threshold-label">Review if score ≥</span>
+                <input type="number" class="threshold-input" id="input-dis-threshold" min="1" max="100" value="60">
+                <span class="threshold-hint">below this = disqualified</span>
+              </div>
+              <button class="settings-save-btn" id="save-thresholds-btn" onclick="saveThresholds()">Save thresholds</button>
+            </div>
+          </div>
+          <div class="settings-col">
+            <!-- Apollo Integration -->
+            <div class="settings-section">
+              <div class="settings-section-title">Apollo Integration</div>
+              <div class="settings-section-sub">When enabled, the pipeline enriches leads with Apollo company data (headcount, funding, tech stack). Requires <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">APOLLO_API_KEY</code> to be set.</div>
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Enable Apollo enrichment</div>
+                  <div id="apollo-status" class="apollo-status off">Disabled</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="apollo-toggle" onchange="saveApollo()">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Email Templates -->
-      <div class="settings-section" style="max-width:600px;">
-        <div class="settings-section-title">Email Templates</div>
-        <div class="settings-section-sub">Templates are selected automatically based on the lead's industry vertical. Use <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{first_name}</code> and <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{company}</code> as placeholders.</div>
-        <div class="tmpl-list" id="tmpl-list"><div class="tmpl-empty">Loading...</div></div>
-        <button class="settings-save-btn" id="tmpl-add-btn" onclick="toggleTmplForm()">+ Add template</button>
-        <div class="tmpl-add-form" id="tmpl-add-form">
-          <div class="tmpl-form-row">
-            <label class="tmpl-form-label">Vertical</label>
-            <select class="tmpl-form-input" id="tmpl-vertical">
-              <option value="ai_tools">AI Tools</option>
-              <option value="film_production">Film Production</option>
-              <option value="vfx_production">VFX Production</option>
-              <option value="animation">Animation</option>
-              <option value="short_drama">Short Drama</option>
-              <option value="ecommerce">Ecommerce</option>
-              <option value="ai_generic">AI Generic</option>
-            </select>
+      <!-- Tab: Exclusions -->
+      <div class="stab-panel" id="stab-panel-exclusions">
+        <div class="settings-section">
+          <div class="settings-section-title">Exclusion List</div>
+          <div class="settings-section-sub">Add company website URLs of existing customers (e.g. <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">imagineart.io</code>). Matched leads are greyed out in results and never sent to Instantly.</div>
+          <div class="exclusion-add-row">
+            <input type="text" class="exclusion-input" id="exclusion-input" placeholder="e.g. imagineart.io or https://veed.io" onkeydown="if(event.key==='Enter') addExclusion()">
+            <button class="settings-save-btn" onclick="addExclusion()">Add</button>
           </div>
-          <div class="tmpl-form-row">
-            <label class="tmpl-form-label">Template name</label>
-            <input type="text" class="tmpl-form-input" id="tmpl-name" placeholder="e.g. Film Production – Version B">
+          <div class="exclusion-list" id="exclusion-list">
+            <div class="exclusion-empty">No exclusions yet.</div>
           </div>
-          <div class="tmpl-form-row">
-            <label class="tmpl-form-label">Subject</label>
-            <input type="text" class="tmpl-form-input" id="tmpl-subject" placeholder="e.g. Seedance 2.0 + {company}?">
-          </div>
-          <div class="tmpl-form-row">
-            <label class="tmpl-form-label">Body</label>
-            <textarea class="tmpl-form-textarea" id="tmpl-body" placeholder="Hi {first_name},&#10;&#10;...&#10;&#10;-- Antti"></textarea>
-            <span class="tmpl-form-hint">Use {first_name} and {company} for personalisation. For images, paste a public URL inline (e.g. https://example.com/image.png).</span>
-          </div>
-          <div class="tmpl-form-actions">
-            <button class="settings-save-btn" onclick="saveTmpl()">Save template</button>
-            <button class="settings-save-btn" onclick="toggleTmplForm()" style="color:var(--text3)">Cancel</button>
+          <div class="import-csv-row">
+            <span class="import-csv-label">Bulk import from Trigify CSV — reads the COMPANY URL column automatically</span>
+            <input type="file" id="exclusion-csv-input" accept=".csv" style="display:none" onchange="importExclusionCsv(this)">
+            <button class="settings-save-btn" id="import-csv-btn" onclick="document.getElementById('exclusion-csv-input').click()">Import CSV</button>
           </div>
         </div>
       </div>
+
+      <!-- Tab: Email Templates -->
+      <div class="stab-panel" id="stab-panel-templates">
+        <div class="settings-section">
+          <div class="settings-section-title">Email Templates</div>
+          <div class="settings-section-sub">Templates are selected automatically based on the lead's industry vertical. Use <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{first_name}</code> and <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{company}</code> as placeholders.</div>
+          <div class="tmpl-list" id="tmpl-list"><div class="tmpl-empty">Loading...</div></div>
+          <button class="settings-save-btn" id="tmpl-add-btn" onclick="toggleTmplForm()">+ Add template</button>
+          <div class="tmpl-add-form" id="tmpl-add-form">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <div class="tmpl-form-row">
+                <label class="tmpl-form-label">Vertical</label>
+                <select class="tmpl-form-input" id="tmpl-vertical">
+                  <option value="ai_tools">AI Tools</option>
+                  <option value="film_production">Film Production</option>
+                  <option value="vfx_production">VFX Production</option>
+                  <option value="animation">Animation</option>
+                  <option value="short_drama">Short Drama</option>
+                  <option value="ecommerce">Ecommerce</option>
+                  <option value="ai_generic">AI Generic</option>
+                </select>
+              </div>
+              <div class="tmpl-form-row">
+                <label class="tmpl-form-label">Template name</label>
+                <input type="text" class="tmpl-form-input" id="tmpl-name" placeholder="e.g. Film Production – Version B">
+              </div>
+            </div>
+            <div class="tmpl-form-row">
+              <label class="tmpl-form-label">Subject</label>
+              <input type="text" class="tmpl-form-input" id="tmpl-subject" placeholder="e.g. Seedance 2.0 + {company}?">
+            </div>
+            <div class="tmpl-form-row">
+              <label class="tmpl-form-label">Body</label>
+              <textarea class="tmpl-form-textarea" id="tmpl-body" placeholder="Hi {first_name},&#10;&#10;...&#10;&#10;-- Antti"></textarea>
+              <span class="tmpl-form-hint">Use {first_name} and {company} for personalisation. For images, paste a public URL inline (e.g. https://example.com/image.png).</span>
+            </div>
+            <div class="tmpl-form-actions">
+              <button class="settings-save-btn" onclick="saveTmpl()">Save template</button>
+              <button class="settings-save-btn" onclick="toggleTmplForm()" style="color:var(--text3)">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </main>
   </div>
 </section>
@@ -2009,6 +2078,13 @@ async function confirmSendEmails() {
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
+function switchSettingsTab(tab) {
+  ['pipeline','exclusions','templates'].forEach(t => {
+    document.getElementById('stab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('stab-panel-' + t).classList.toggle('active', t === tab);
+  });
+}
+
 async function openSettings() {
   const [s, excl, tmpls] = await Promise.all([
     fetch('/api/settings').then(r => r.json()).catch(() => appSettings),
@@ -2020,9 +2096,30 @@ async function openSettings() {
   emailTemplates = tmpls;
   document.getElementById('input-qual-threshold').value = s.qualified_threshold;
   document.getElementById('input-dis-threshold').value  = s.disqualified_threshold;
+  const apolloOn = !!s.apollo_enabled;
+  document.getElementById('apollo-toggle').checked = apolloOn;
+  const statusEl = document.getElementById('apollo-status');
+  statusEl.textContent = apolloOn ? 'Enabled' : 'Disabled';
+  statusEl.className   = 'apollo-status ' + (apolloOn ? 'on' : 'off');
   renderExclusions();
   renderTemplates();
+  switchSettingsTab('pipeline');
   show('s-settings');
+}
+
+async function saveApollo() {
+  const enabled = document.getElementById('apollo-toggle').checked;
+  const qt = parseInt(document.getElementById('input-qual-threshold').value, 10) || appSettings.qualified_threshold;
+  const dt = parseInt(document.getElementById('input-dis-threshold').value, 10)  || appSettings.disqualified_threshold;
+  await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ qualified_threshold: qt, disqualified_threshold: dt, apollo_enabled: enabled }),
+  });
+  appSettings.apollo_enabled = enabled;
+  const statusEl = document.getElementById('apollo-status');
+  statusEl.textContent = enabled ? 'Enabled' : 'Disabled';
+  statusEl.className   = 'apollo-status ' + (enabled ? 'on' : 'off');
 }
 
 function exportRun() {
@@ -2047,10 +2144,10 @@ async function saveThresholds() {
   const resp = await fetch('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ qualified_threshold: qt, disqualified_threshold: dt }),
+    body: JSON.stringify({ qualified_threshold: qt, disqualified_threshold: dt, apollo_enabled: !!appSettings.apollo_enabled }),
   });
   if (!resp.ok) { alert((await resp.json()).error); return; }
-  appSettings = { qualified_threshold: qt, disqualified_threshold: dt };
+  appSettings = { ...appSettings, qualified_threshold: qt, disqualified_threshold: dt };
   const btn = document.getElementById('save-thresholds-btn');
   btn.textContent = 'Saved ✓';
   btn.classList.add('saved');
