@@ -9,11 +9,14 @@ Additional override: non-empty hard_disqualifiers always → disqualified.
 """
 
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Optional
 
 import config
 from claude.stage2_decision import DecisionOutput
 from claude.stage1_evidence import EvidenceOutput
+
+if TYPE_CHECKING:
+    from campaigns.context import CampaignContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,24 +26,27 @@ Decision = Literal["qualified", "disqualified", "review"]
 def route_decision(
     decision: DecisionOutput,
     evidence: EvidenceOutput,
+    campaign: Optional["CampaignContext"] = None,
 ) -> Decision:
     """
     Final Python-authoritative routing.
 
     Order of precedence:
     1. Hard disqualifiers present → disqualified (always overrides)
-    2. Score-based threshold:
-       - score >= QUALIFIED_THRESHOLD  → qualified
-       - score <  DISQUALIFIED_THRESHOLD → disqualified
-       - else → review
+    2. Low signal strength → disqualified (no reliable evidence base)
+    3. Score-based threshold routing
 
     Args:
         decision: Stage 2 output (score already integrity-checked)
         evidence: Stage 1 output (used for hard disqualifier check)
+        campaign: Optional CampaignContext; if None uses config defaults
 
     Returns:
         Final routing decision string
     """
+    qt = campaign.qualified_threshold if campaign is not None else config.QUALIFIED_THRESHOLD
+    dt = campaign.disqualified_threshold if campaign is not None else config.DISQUALIFIED_THRESHOLD
+
     # Override 1: hard disqualifiers
     if evidence.hard_disqualifiers:
         logger.info(
@@ -61,9 +67,9 @@ def route_decision(
 
     # Score-based routing
     score = decision.score
-    if score >= config.QUALIFIED_THRESHOLD:
+    if score >= qt:
         result: Decision = "qualified"
-    elif score < config.DISQUALIFIED_THRESHOLD:
+    elif score < dt:
         result = "disqualified"
     else:
         result = "review"

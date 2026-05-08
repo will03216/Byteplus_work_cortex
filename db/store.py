@@ -13,8 +13,17 @@ import asyncpg
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 _DDL = """
+CREATE TABLE IF NOT EXISTS campaigns (
+    id          TEXT        PRIMARY KEY,
+    name        TEXT        NOT NULL,
+    description TEXT,
+    is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     run_id       TEXT         PRIMARY KEY,
+    campaign_id  TEXT         REFERENCES campaigns(id),
     filename     TEXT         NOT NULL,
     concurrency  INT          NOT NULL,
     status       TEXT         NOT NULL DEFAULT 'running',
@@ -62,19 +71,31 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Campaign-scoped settings (used for multi-campaign threshold management)
+CREATE TABLE IF NOT EXISTS campaign_settings (
+    campaign_id TEXT        NOT NULL REFERENCES campaigns(id),
+    key         TEXT        NOT NULL,
+    value       TEXT        NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (campaign_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS exclusions (
-    id         SERIAL      PRIMARY KEY,
-    value      TEXT        NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    id          SERIAL      PRIMARY KEY,
+    campaign_id TEXT        REFERENCES campaigns(id),
+    value       TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (campaign_id, value)
 );
 
 CREATE TABLE IF NOT EXISTS email_templates (
-    id         SERIAL      PRIMARY KEY,
-    vertical   TEXT        NOT NULL,
-    name       TEXT        NOT NULL,
-    subject    TEXT        NOT NULL,
-    body       TEXT        NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    id          SERIAL      PRIMARY KEY,
+    campaign_id TEXT        REFERENCES campaigns(id),
+    vertical    TEXT        NOT NULL,
+    name        TEXT        NOT NULL,
+    subject     TEXT        NOT NULL,
+    body        TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
 
@@ -110,6 +131,24 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS manual_email_status TEXT")
         # Email status on runs
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS email_status TEXT DEFAULT 'not_sent'")
+        # Campaign support columns (idempotent migration)
+        await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id)")
+        await conn.execute("ALTER TABLE exclusions ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id)")
+        await conn.execute("ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_campaign ON runs(campaign_id)")
+        # Seed known campaigns before backfilling FKs — order matters
+        for cid, name, desc in [
+            ("seedance", "Seedance",  "ByteDance AI video generation platform"),
+            ("kling",    "Kling AI",   "Kuaishou cinematic AI video generation platform"),
+        ]:
+            await conn.execute(
+                "INSERT INTO campaigns (id, name, description) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING",
+                cid, name, desc,
+            )
+        # Backfill existing rows that pre-date campaign support
+        await conn.execute("UPDATE runs SET campaign_id = 'seedance' WHERE campaign_id IS NULL")
+        await conn.execute("UPDATE exclusions SET campaign_id = 'seedance' WHERE campaign_id IS NULL")
+        await conn.execute("UPDATE email_templates SET campaign_id = 'seedance' WHERE campaign_id IS NULL")
 
 
 async def mark_stale_runs(pool: asyncpg.Pool) -> None:
@@ -119,12 +158,38 @@ async def mark_stale_runs(pool: asyncpg.Pool) -> None:
 
 # ── Runs ──────────────────────────────────────────────────────────────────────
 
+async def seed_campaigns(pool: asyncpg.Pool) -> None:
+    """Ensure campaign registry rows exist for all known campaigns."""
+    known = [
+        ("seedance", "Seedance",  "ByteDance AI video generation platform"),
+        ("kling",    "Kling AI",   "Kuaishou cinematic AI video generation platform"),
+    ]
+    for cid, name, desc in known:
+        await pool.execute(
+            """INSERT INTO campaigns (id, name, description)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (id) DO NOTHING""",
+            cid, name, desc,
+        )
+
+
+async def list_campaigns(pool: asyncpg.Pool) -> list:
+    rows = await pool.fetch(
+        "SELECT id, name, description, is_active FROM campaigns ORDER BY id"
+    )
+    return [{"id": r["id"], "name": r["name"], "description": r["description"], "is_active": r["is_active"]} for r in rows]
+
+
 async def insert_run(
-    pool: asyncpg.Pool, run_id: str, filename: str, concurrency: int
+    pool: asyncpg.Pool,
+    run_id: str,
+    filename: str,
+    concurrency: int,
+    campaign_id: str = "seedance",
 ) -> None:
     await pool.execute(
-        "INSERT INTO runs (run_id, filename, concurrency) VALUES ($1, $2, $3)",
-        run_id, filename, concurrency,
+        "INSERT INTO runs (run_id, campaign_id, filename, concurrency) VALUES ($1, $2, $3, $4)",
+        run_id, campaign_id, filename, concurrency,
     )
 
 
@@ -148,24 +213,43 @@ async def update_run(
         )
 
 
-async def list_runs(pool: asyncpg.Pool) -> list:
-    rows = await pool.fetch(
-        """
-        SELECT r.run_id, r.filename, r.status, r.lead_count,
-               r.created_at, r.completed_at, r.email_status,
-               COUNT(l.id) AS n_total,
-               COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
-               COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
-               COUNT(CASE WHEN l.decision='disqualified' THEN 1 END) AS n_disqualified
-          FROM runs r
-          LEFT JOIN leads l ON l.run_id = r.run_id
-         GROUP BY r.run_id
-         ORDER BY r.created_at DESC
-        """,
-    )
+async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> list:
+    if campaign_id:
+        rows = await pool.fetch(
+            """
+            SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
+                   r.created_at, r.completed_at, r.email_status,
+                   COUNT(l.id) AS n_total,
+                   COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
+                   COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
+                   COUNT(CASE WHEN l.decision='disqualified' THEN 1 END) AS n_disqualified
+              FROM runs r
+              LEFT JOIN leads l ON l.run_id = r.run_id
+             WHERE r.campaign_id = $1
+             GROUP BY r.run_id
+             ORDER BY r.created_at DESC
+            """,
+            campaign_id,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
+                   r.created_at, r.completed_at, r.email_status,
+                   COUNT(l.id) AS n_total,
+                   COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
+                   COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
+                   COUNT(CASE WHEN l.decision='disqualified' THEN 1 END) AS n_disqualified
+              FROM runs r
+              LEFT JOIN leads l ON l.run_id = r.run_id
+             GROUP BY r.run_id
+             ORDER BY r.created_at DESC
+            """,
+        )
     return [
         {
             "run_id":         r["run_id"],
+            "campaign_id":    r["campaign_id"] or "seedance",
             "filename":       r["filename"],
             "status":         r["status"],
             "lead_count":     max(r["lead_count"] or 0, r["n_total"] or 0),
@@ -323,36 +407,55 @@ async def get_leads_for_email(pool: asyncpg.Pool, run_id: str, max_score: int) -
 _SETTINGS_DEFAULTS = {"qualified_threshold": "70", "disqualified_threshold": "60"}
 
 
-async def get_settings(pool: asyncpg.Pool) -> dict:
-    rows = await pool.fetch("SELECT key, value FROM settings")
+async def get_settings(pool: asyncpg.Pool, campaign_id: str = "seedance") -> dict:
+    # Try campaign_settings first; fall back to legacy settings table
+    rows = await pool.fetch(
+        "SELECT key, value FROM campaign_settings WHERE campaign_id = $1", campaign_id
+    )
+    if not rows:
+        rows = await pool.fetch("SELECT key, value FROM settings")
     result = dict(_SETTINGS_DEFAULTS)
     for r in rows:
         result[r["key"]] = r["value"]
     return result
 
 
-async def save_settings(pool: asyncpg.Pool, settings: dict) -> None:
+async def save_settings(pool: asyncpg.Pool, settings: dict, campaign_id: str = "seedance") -> None:
     for key, value in settings.items():
         await pool.execute(
-            """INSERT INTO settings(key, value) VALUES($1, $2)
-               ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()""",
-            key, str(value),
+            """INSERT INTO campaign_settings(campaign_id, key, value)
+               VALUES($1, $2, $3)
+               ON CONFLICT(campaign_id, key) DO UPDATE SET value=$3, updated_at=now()""",
+            campaign_id, key, str(value),
         )
+        # Keep legacy settings in sync for backward compatibility
+        if campaign_id == "seedance":
+            await pool.execute(
+                """INSERT INTO settings(key, value) VALUES($1, $2)
+                   ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()""",
+                key, str(value),
+            )
 
 
 # ── Exclusions ────────────────────────────────────────────────────────────────
 
-async def get_exclusions(pool: asyncpg.Pool) -> list:
+async def get_exclusions(pool: asyncpg.Pool, campaign_id: str = "seedance") -> list:
     rows = await pool.fetch(
-        "SELECT id, value FROM exclusions ORDER BY created_at DESC"
+        "SELECT id, value FROM exclusions WHERE campaign_id = $1 ORDER BY created_at DESC",
+        campaign_id,
     )
+    if not rows:
+        # Fall back to legacy rows without campaign_id for Seedance
+        rows = await pool.fetch(
+            "SELECT id, value FROM exclusions WHERE campaign_id IS NULL ORDER BY created_at DESC"
+        )
     return [{"id": r["id"], "value": r["value"]} for r in rows]
 
 
-async def add_exclusion(pool: asyncpg.Pool, value: str) -> None:
+async def add_exclusion(pool: asyncpg.Pool, value: str, campaign_id: str = "seedance") -> None:
     await pool.execute(
-        "INSERT INTO exclusions(value) VALUES($1) ON CONFLICT DO NOTHING",
-        value.strip(),
+        "INSERT INTO exclusions(campaign_id, value) VALUES($1, $2) ON CONFLICT (campaign_id, value) DO NOTHING",
+        campaign_id, value.strip(),
     )
 
 
@@ -521,21 +624,33 @@ Book 30min: https://bytedance.sg.larkoffice.com/scheduler/d18e3ecd70eae8c6""",
 ]
 
 
-async def seed_email_templates(pool: asyncpg.Pool) -> None:
-    count = await pool.fetchval("SELECT COUNT(*) FROM email_templates")
+async def seed_email_templates(pool: asyncpg.Pool, campaign_id: str = "seedance") -> None:
+    count = await pool.fetchval(
+        "SELECT COUNT(*) FROM email_templates WHERE campaign_id = $1", campaign_id
+    )
     if count and count > 0:
         return
-    for t in _SEED_TEMPLATES:
-        await pool.execute(
-            "INSERT INTO email_templates (vertical, name, subject, body) VALUES ($1,$2,$3,$4)",
-            t["vertical"], t["name"], t["subject"], t["body"],
-        )
+    if campaign_id == "seedance":
+        for t in _SEED_TEMPLATES:
+            await pool.execute(
+                "INSERT INTO email_templates (campaign_id, vertical, name, subject, body) VALUES ($1,$2,$3,$4,$5)",
+                campaign_id, t["vertical"], t["name"], t["subject"], t["body"],
+            )
 
 
-async def get_email_templates(pool: asyncpg.Pool) -> list:
+async def get_email_templates(pool: asyncpg.Pool, campaign_id: str = "seedance") -> list:
     rows = await pool.fetch(
-        "SELECT id, vertical, name, subject, body, created_at FROM email_templates ORDER BY vertical, id"
+        """SELECT id, campaign_id, vertical, name, subject, body, created_at
+             FROM email_templates
+            WHERE campaign_id = $1
+            ORDER BY vertical, id""",
+        campaign_id,
     )
+    if not rows:
+        # Fall back to legacy rows without campaign_id
+        rows = await pool.fetch(
+            "SELECT id, vertical, name, subject, body, created_at FROM email_templates WHERE campaign_id IS NULL ORDER BY vertical, id"
+        )
     return [
         {
             "id":       r["id"],
@@ -550,13 +665,14 @@ async def get_email_templates(pool: asyncpg.Pool) -> list:
 
 
 async def add_email_template(
-    pool: asyncpg.Pool, vertical: str, name: str, subject: str, body: str
+    pool: asyncpg.Pool, vertical: str, name: str, subject: str, body: str,
+    campaign_id: str = "seedance",
 ) -> dict:
     row = await pool.fetchrow(
-        """INSERT INTO email_templates (vertical, name, subject, body)
-           VALUES ($1,$2,$3,$4)
-           RETURNING id, vertical, name, subject, body, created_at""",
-        vertical, name, subject, body,
+        """INSERT INTO email_templates (campaign_id, vertical, name, subject, body)
+           VALUES ($1,$2,$3,$4,$5)
+           RETURNING id, campaign_id, vertical, name, subject, body, created_at""",
+        campaign_id, vertical, name, subject, body,
     )
     return {
         "id":       row["id"],

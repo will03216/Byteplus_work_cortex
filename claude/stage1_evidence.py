@@ -7,7 +7,7 @@ Retries up to MAX_RETRIES times on parse or API failure.
 
 import json
 import logging
-from typing import Literal, Any
+from typing import TYPE_CHECKING, Literal, Any, Optional
 
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -16,6 +16,9 @@ import config
 from claude.prompts import build_stage1_system, build_stage1_messages
 from llm import LiteLLMClient, LLMError
 from tools.enrichment import EnrichedLead
+
+if TYPE_CHECKING:
+    from campaigns.context import CampaignContext
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +127,7 @@ def _build_enrichment_dict(enriched: EnrichedLead) -> dict[str, Any]:
 async def extract_evidence(
     client:   LiteLLMClient,
     enriched: EnrichedLead,
+    campaign: Optional["CampaignContext"] = None,
 ) -> EvidenceOutput:
     """
     Call the configured LLM for Stage 1 evidence extraction.
@@ -131,6 +135,7 @@ async def extract_evidence(
     Args:
         client:   Shared LiteLLM client instance
         enriched: Enriched lead (normalized lead + tool enrichment data)
+        campaign: Optional CampaignContext; if None falls back to hardcoded Seedance prompt
 
     Returns:
         EvidenceOutput with signal strength, evidence, unknowns, disqualifiers
@@ -141,7 +146,9 @@ async def extract_evidence(
     lead_dict       = lead.model_dump()
     enrichment_dict = _build_enrichment_dict(enriched)
 
-    logger.info("Stage 1 → lead_id=%s", lead_id)
+    system_prompt = campaign.stage1_system_prompt if campaign is not None else build_stage1_system()
+
+    logger.info("Stage 1 → lead_id=%s campaign=%s", lead_id, campaign.id if campaign else "seedance")
     logger.debug(
         "Stage 1 input lead_id=%s: %s",
         lead_id,
@@ -149,7 +156,7 @@ async def extract_evidence(
     )
 
     raw_text = await client.generate(
-        system_prompt = build_stage1_system(),
+        system_prompt = system_prompt,
         messages      = build_stage1_messages(lead_dict, enrichment_dict),
         max_tokens    = 1024,
     )

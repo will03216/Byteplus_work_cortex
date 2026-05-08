@@ -34,8 +34,12 @@ RUNS_DIR   = OUTPUT_DIR / "runs"
 
 sys.path.insert(0, str(ROOT))
 import db as store
+from campaigns import load_all_campaigns, list_campaign_ids
 
 logger = logging.getLogger("seedance.ui")
+
+# ── Skills root ───────────────────────────────────────────────────────────────
+SKILLS_ROOT = ROOT / "skills"
 
 # ── In-memory job state (SSE streaming only) ──────────────────────────────────
 # Keyed by run_id. Cleared after results are imported to DB.
@@ -66,11 +70,18 @@ async def lifespan(app: FastAPI):
     global _pool
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Load all campaign contexts from skills/
+    try:
+        load_all_campaigns(SKILLS_ROOT)
+    except Exception as exc:
+        logger.warning("Campaign loading failed: %s", exc)
+
     if DATABASE_URL:
         try:
             _pool = await store.create_pool(DATABASE_URL)
             await store.create_tables(_pool)
             await store.mark_stale_runs(_pool)
+            await store.seed_campaigns(_pool)
             s = await store.get_settings(_pool)
             _settings["qualified_threshold"]    = int(s.get("qualified_threshold", 70))
             _settings["disqualified_threshold"] = int(s.get("disqualified_threshold", 60))
@@ -338,7 +349,8 @@ async def logout(request: Request):
 # ── API: run pipeline ─────────────────────────────────────────────────────────
 
 @app.post("/api/run")
-async def run_pipeline(request: Request, file: UploadFile = File(...), concurrency: int = Form(10)):
+async def run_pipeline(request: Request, file: UploadFile = File(...), concurrency: int = Form(10),
+                       campaign: str = Form("seedance")):
     _require_auth(request)
     run_id  = str(uuid.uuid4())
     content = await file.read()
@@ -352,22 +364,53 @@ async def run_pipeline(request: Request, file: UploadFile = File(...), concurren
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # Persist run record
+    # Persist run record with campaign_id
     if _pool:
-        await store.insert_run(_pool, run_id, file.filename or "upload.csv", concurrency)
+        await store.insert_run(_pool, run_id, file.filename or "upload.csv", concurrency, campaign_id=campaign)
 
-    _jobs[run_id] = {"lines": [], "status": "running", "returncode": None}
-    asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency))
+    _jobs[run_id] = {"lines": [], "status": "running", "returncode": None, "campaign_id": campaign}
+    asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency, campaign_id=campaign))
 
     return JSONResponse({"run_id": run_id})
 
 
-async def _run_job(run_id: str, csv_path: str, run_dir: Path, concurrency: int):
+# ── Campaign-scoped upload endpoint ──────────────────────────────────────────
+
+@app.post("/api/campaigns/{campaign_id}/run")
+async def run_pipeline_campaign(request: Request, campaign_id: str,
+                                file: UploadFile = File(...), concurrency: int = Form(10)):
+    """Campaign-scoped upload — identical to /api/run but campaign is in the URL path."""
+    _require_auth(request)
+    known = list_campaign_ids()
+    if known and campaign_id not in known:
+        return JSONResponse({"error": f"Unknown campaign '{campaign_id}'. Available: {', '.join(known)}"}, status_code=400)
+
+    run_id  = str(uuid.uuid4())
+    content = await file.read()
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    tmp.write(content)
+    tmp.close()
+
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    if _pool:
+        await store.insert_run(_pool, run_id, file.filename or "upload.csv", concurrency, campaign_id=campaign_id)
+
+    _jobs[run_id] = {"lines": [], "status": "running", "returncode": None, "campaign_id": campaign_id}
+    asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency, campaign_id=campaign_id))
+
+    return JSONResponse({"run_id": run_id, "campaign_id": campaign_id})
+
+
+async def _run_job(run_id: str, csv_path: str, run_dir: Path, concurrency: int, campaign_id: str = "seedance"):
     cmd = [
         sys.executable, str(ROOT / "main.py"),
         "--input",       csv_path,
         "--output-dir",  str(run_dir),
         "--concurrency", str(max(5, min(20, concurrency))),
+        "--campaign",    campaign_id,
     ]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -452,6 +495,131 @@ async def get_results(request: Request, run_id: str):
         return JSONResponse([], status_code=404)
     return JSONResponse(_mark_exclusions(_apply_thresholds(leads)))
 
+
+# ── API: campaign registry ────────────────────────────────────────────────────
+
+@app.get("/api/campaigns")
+async def api_list_campaigns(request: Request):
+    _require_auth(request)
+    if _pool:
+        return JSONResponse(await store.list_campaigns(_pool))
+    campaign_ids = list_campaign_ids()
+    return JSONResponse([{"id": cid, "name": cid.capitalize()} for cid in campaign_ids])
+
+
+# ── API: campaign-scoped runs ─────────────────────────────────────────────────
+
+@app.get("/api/campaigns/{campaign_id}/runs")
+async def api_list_campaign_runs(request: Request, campaign_id: str):
+    _require_auth(request)
+    if _pool:
+        return JSONResponse(await store.list_runs(_pool, campaign_id=campaign_id))
+    # Fallback: filter by campaign_id stored in _jobs
+    if not RUNS_DIR.exists():
+        return JSONResponse([])
+    dirs = sorted(RUNS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    return JSONResponse([_summarize_run_dir(d) for d in dirs])
+
+
+@app.get("/api/campaigns/{campaign_id}/runs/{run_id}")
+async def api_get_campaign_run(request: Request, campaign_id: str, run_id: str):
+    _require_auth(request)
+    if _pool:
+        leads = await store.get_leads(_pool, run_id)
+    elif (RUNS_DIR / run_id).exists():
+        leads = _read_run_files(RUNS_DIR / run_id)
+    else:
+        return JSONResponse([], status_code=404)
+    return JSONResponse(_mark_exclusions(_apply_thresholds(leads)))
+
+
+# ── API: campaign-scoped settings ─────────────────────────────────────────────
+
+@app.get("/api/campaigns/{campaign_id}/settings")
+async def api_get_campaign_settings(request: Request, campaign_id: str):
+    _require_auth(request)
+    if _pool:
+        s = await store.get_settings(_pool, campaign_id=campaign_id)
+        return JSONResponse(s)
+    return JSONResponse(_settings)
+
+
+@app.post("/api/campaigns/{campaign_id}/settings")
+async def api_save_campaign_settings(request: Request, campaign_id: str):
+    _require_auth(request)
+    body = await request.json()
+    qt = int(body.get("qualified_threshold", 70))
+    dt = int(body.get("disqualified_threshold", 60))
+    if dt >= qt:
+        return JSONResponse({"error": "Review threshold must be below qualified threshold"}, status_code=400)
+    if _pool:
+        await store.save_settings(_pool, {
+            "qualified_threshold": str(qt),
+            "disqualified_threshold": str(dt),
+        }, campaign_id=campaign_id)
+    # Update in-memory settings for Seedance (backward compat)
+    if campaign_id == "seedance":
+        _settings["qualified_threshold"]    = qt
+        _settings["disqualified_threshold"] = dt
+    return JSONResponse({"ok": True})
+
+
+# ── API: campaign-scoped exclusions ──────────────────────────────────────────
+
+@app.get("/api/campaigns/{campaign_id}/exclusions")
+async def api_get_campaign_exclusions(request: Request, campaign_id: str):
+    _require_auth(request)
+    if _pool:
+        return JSONResponse(await store.get_exclusions(_pool, campaign_id=campaign_id))
+    if campaign_id == "seedance":
+        return JSONResponse(_exclusions)
+    return JSONResponse([])
+
+
+@app.post("/api/campaigns/{campaign_id}/exclusions")
+async def api_add_campaign_exclusion(request: Request, campaign_id: str):
+    _require_auth(request)
+    body = await request.json()
+    value = (body.get("value") or "").strip()
+    if not value:
+        return JSONResponse({"error": "Value required"}, status_code=400)
+    if _pool:
+        await store.add_exclusion(_pool, value, campaign_id=campaign_id)
+        if campaign_id == "seedance":
+            _exclusions[:] = await store.get_exclusions(_pool)
+    elif campaign_id == "seedance":
+        _exclusions.insert(0, {"id": len(_exclusions) + 1, "value": value})
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/campaigns/{campaign_id}/exclusions/{exclusion_id}")
+async def api_remove_campaign_exclusion(request: Request, campaign_id: str, exclusion_id: int):
+    _require_auth(request)
+    if _pool:
+        await store.remove_exclusion(_pool, exclusion_id)
+        if campaign_id == "seedance":
+            _exclusions[:] = await store.get_exclusions(_pool)
+    elif campaign_id == "seedance":
+        for i, e in enumerate(_exclusions):
+            if e["id"] == exclusion_id:
+                _exclusions.pop(i)
+                break
+    return JSONResponse({"ok": True})
+
+
+# ── API: campaign-scoped email templates ──────────────────────────────────────
+
+@app.get("/api/campaigns/{campaign_id}/email-templates")
+async def api_get_campaign_templates(request: Request, campaign_id: str):
+    _require_auth(request)
+    if _pool:
+        return JSONResponse(await store.get_email_templates(_pool, campaign_id=campaign_id))
+    if campaign_id == "seedance":
+        return JSONResponse(_templates)
+    return JSONResponse([])
+
+
+# ── API: runs (flat, backward-compat — defaults to Seedance) ─────────────────
 
 @app.get("/api/runs")
 async def list_runs(request: Request):
@@ -903,6 +1071,7 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, -apple
 .run-micro-badge.qualified    { background:var(--green-bg); color:var(--green); }
 .run-micro-badge.review       { background:var(--amber-bg); color:var(--amber); }
 .run-micro-badge.disqualified { background:var(--red-bg);   color:var(--red); }
+.campaign-badge { font-size:9px; font-family:'DM Mono',monospace; padding:1px 6px; border-radius:3px; font-weight:600; background:rgba(200,255,87,0.1); color:var(--accent); border:1px solid rgba(200,255,87,0.2); }
 .run-status-dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:4px; }
 .run-status-dot.done  { background:var(--green); }
 .run-status-dot.error { background:var(--red); }
@@ -1153,6 +1322,14 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
       <input type="file" id="file-input" accept=".csv" style="display:none">
 
       <div class="option-row">
+        <div class="option-label">Campaign <span>product context</span></div>
+        <select id="campaign-select" style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:5px 10px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;cursor:pointer;outline:none;">
+          <option value="seedance">Seedance</option>
+          <option value="kling">Kling AI</option>
+        </select>
+      </div>
+
+      <div class="option-row">
         <div class="option-label">Concurrency <span>parallel leads</span></div>
         <div class="conc-wrap">
           <button class="conc-btn" id="conc-dec">−</button>
@@ -1241,7 +1418,10 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
 
     <main class="results-main">
       <div class="page-header">
-        <div class="page-title">Lead Qualification</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px;">
+          <div class="page-title">Lead Qualification</div>
+          <span class="campaign-badge" id="page-campaign-badge" style="font-size:11px;padding:2px 10px;border-radius:4px;display:none;"></span>
+        </div>
         <div class="page-meta" id="page-meta">—</div>
       </div>
       <div class="summary-row">
@@ -1502,9 +1682,11 @@ document.getElementById('conc-inc').addEventListener('click', () => {
 
 async function startRun() {
   if (!selectedFile) return;
+  const campaign = document.getElementById('campaign-select').value;
   const fd = new FormData();
   fd.append('file', selectedFile);
   fd.append('concurrency', concurrency);
+  fd.append('campaign', campaign);
   resetProgress();
   show('s-progress');
   const { run_id } = await fetch('/api/run', { method:'POST', body:fd }).then(r => r.json());
@@ -1675,9 +1857,32 @@ function populateResults(leads, runId) {
   ];
   document.getElementById('page-meta').textContent = metaBits.join(' · ');
 
+  const badge = document.getElementById('page-campaign-badge');
+  if (badge) {
+    const cId = runMeta && runMeta.campaign_id ? runMeta.campaign_id : null;
+    if (cId) {
+      badge.textContent = cId.charAt(0).toUpperCase() + cId.slice(1).replace(/_/g, ' ');
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all'));
   document.querySelector('.results-main').scrollTop = 0;
   renderLeads('all');
+}
+
+async function loadCampaigns() {
+  try {
+    const campaigns = await fetch('/api/campaigns').then(r => r.json());
+    const sel = document.getElementById('campaign-select');
+    if (campaigns && campaigns.length) {
+      sel.innerHTML = campaigns.map(c =>
+        `<option value="${c.id}">${c.name}</option>`
+      ).join('');
+    }
+  } catch(e) { /* leave static fallback options */ }
 }
 
 async function loadPastRuns() {
@@ -1699,7 +1904,9 @@ function renderUploadRuns(runs) {
   el.innerHTML = runs.map(r => {
     const ts = formatRunDateTime(r.created_at);
     const fname = (r.filename || 'Unnamed run').length > 28 ? (r.filename || 'Unnamed run').slice(0,25) + '…' : (r.filename || 'Unnamed run');
+    const cLabel = r.campaign_id ? r.campaign_id.charAt(0).toUpperCase() + r.campaign_id.slice(1) : 'Seedance';
     const badges = [
+      `<span class="campaign-badge">${cLabel}</span>`,
       r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
       r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
       r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
@@ -1729,7 +1936,9 @@ function renderPastRuns(runs) {
     const date = formatRunDateTime(r.created_at);
     const baseName = r.filename || 'Unnamed run';
     const fname = baseName.length > 22 ? baseName.slice(0,19) + '…' : baseName;
+    const cLabel = r.campaign_id ? r.campaign_id.charAt(0).toUpperCase() + r.campaign_id.slice(1) : 'Seedance';
     const badges = [
+      `<span class="campaign-badge">${cLabel}</span>`,
       r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
       r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
       r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
@@ -2370,6 +2579,7 @@ async function deleteTmpl(id) {
 }
 
 async function boot() {
+  await loadCampaigns();
   await loadPastRuns();
   const requestedRunId = getRunIdFromUrl();
   if (!requestedRunId) return;

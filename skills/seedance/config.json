@@ -1,0 +1,13 @@
+{
+    "name": "Seedance",
+    "tagline": "ByteDance's AI video generation platform",
+    "score_weights": {
+        "segment_fit": 30,
+        "buyer_fit": 25,
+        "pain_fit": 20,
+        "workflow_fit": 15,
+        "commercial_fit": 10
+    },
+    "qualified_threshold": 70,
+    "disqualified_threshold": 60
+}

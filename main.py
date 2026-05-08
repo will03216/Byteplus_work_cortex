@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config
+from campaigns import load_all_campaigns, get_campaign, CampaignContext
 from llm import LiteLLMClient
 from normalization import normalize_batch, LeadInput
 from normalization.csv_loader import load_csv
@@ -100,6 +101,7 @@ async def _run_lead_pipeline(
     lead:       LeadInput,
     output_dir: str,
     stats:      RunStats,
+    campaign:   CampaignContext = None,
 ) -> None:
     """Inner pipeline steps for a single lead (no semaphore, no timeout — caller owns those)."""
     logger = logging.getLogger(__name__)
@@ -107,14 +109,14 @@ async def _run_lead_pipeline(
     # Enrichment is already async because it performs concurrent network fetches.
     enriched: EnrichedLead = await enrich_lead(lead)
 
-    # Stage 1: Evidence extraction
-    evidence: EvidenceOutput = await extract_evidence(client, enriched)
+    # Stage 1: Evidence extraction (campaign-aware)
+    evidence: EvidenceOutput = await extract_evidence(client, enriched, campaign=campaign)
 
-    # Stage 2: Qualification decision
-    decision: DecisionOutput = await make_decision(client, evidence)
+    # Stage 2: Qualification decision (campaign-aware)
+    decision: DecisionOutput = await make_decision(client, evidence, campaign=campaign)
 
-    # Routing (pure Python)
-    routing = route_decision(decision, evidence)
+    # Routing (pure Python, campaign-aware thresholds)
+    routing = route_decision(decision, evidence, campaign=campaign)
 
     # Override decision field in DecisionOutput to match final routing
     decision = decision.model_copy(update={"decision": routing})
@@ -135,6 +137,7 @@ async def process_lead(
     output_dir: str,
     sem:        asyncio.Semaphore,
     stats:      RunStats,
+    campaign:   CampaignContext = None,
 ) -> None:
     """Full pipeline for a single lead, bounded by semaphore and per-lead deadline."""
     logger = logging.getLogger(__name__)
@@ -142,7 +145,7 @@ async def process_lead(
     async with sem:
         try:
             await asyncio.wait_for(
-                _run_lead_pipeline(client, lead, output_dir, stats),
+                _run_lead_pipeline(client, lead, output_dir, stats, campaign=campaign),
                 timeout=config.LEAD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -162,8 +165,15 @@ async def run_batch(
     input_path:  str,
     output_dir:  str,
     concurrency: int,
+    campaign_id: str = config.DEFAULT_CAMPAIGN,
 ) -> RunStats:
     logger = logging.getLogger(__name__)
+
+    # Load campaign context — must happen before processing
+    skills_root = Path(__file__).parent / "skills"
+    load_all_campaigns(skills_root)
+    campaign = get_campaign(campaign_id)
+    logger.info("Campaign: %s (%s)", campaign.name, campaign.id)
 
     # Load leads — auto-detect format from file extension
     suffix = Path(input_path).suffix.lower()
@@ -212,7 +222,7 @@ async def run_batch(
     )
 
     tasks = [
-        process_lead(client, lead, output_dir, sem, stats)
+        process_lead(client, lead, output_dir, sem, stats, campaign=campaign)
         for lead in leads
     ]
     await asyncio.gather(*tasks, return_exceptions=False)
@@ -246,6 +256,11 @@ def parse_args() -> argparse.Namespace:
         help=f"Number of concurrent leads to process, 5–20 (default: {config.DEFAULT_CONCURRENCY})",
     )
     parser.add_argument(
+        "--campaign",
+        default=config.DEFAULT_CAMPAIGN,
+        help=f"Campaign to run (default: {config.DEFAULT_CAMPAIGN}). Must match a directory under skills/",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable debug logging",
@@ -259,7 +274,8 @@ def main() -> None:
     logger = logging.getLogger(__name__)
 
     logger.info("=" * 50)
-    logger.info("Seedance Lead Qualification Engine")
+    logger.info("Lead Qualification Engine")
+    logger.info("  Campaign   : %s", args.campaign)
     logger.info("  Input      : %s", args.input)
     logger.info("  Output dir : %s", args.output_dir)
     logger.info("  Concurrency: %d", args.concurrency)
@@ -274,6 +290,7 @@ def main() -> None:
             input_path  = args.input,
             output_dir  = args.output_dir,
             concurrency = args.concurrency,
+            campaign_id = args.campaign,
         )
     )
 

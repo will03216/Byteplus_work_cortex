@@ -52,6 +52,10 @@ DEFAULT_CONCURRENCY    = 10
 MAX_RETRIES            = 2
 LEAD_TIMEOUT_SECONDS = 90   # entire per-lead pipeline deadline (enrich + stage1 + stage2 + retries)
 
+# ── Campaign defaults ────────────────────────────────────────────────────────
+DEFAULT_CAMPAIGN = os.getenv("DEFAULT_CAMPAIGN", "seedance")
+SKILLS_DIR       = os.getenv("SKILLS_DIR", "skills")          # relative to project root
+
 # ── Output paths (relative to --output-dir) ──────────────────────────────────
 QUALIFIED_CSV    = "qualified_leads.csv"
 DISQUALIFIED_CSV = "disqualified_leads.csv"

@@ -8,7 +8,7 @@ Python enforces score integrity and decision thresholds after parsing.
 
 import json
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -17,6 +17,9 @@ import config
 from claude.prompts import build_stage2_system, build_stage2_messages
 from claude.stage1_evidence import EvidenceOutput
 from llm import LiteLLMClient, LLMError
+
+if TYPE_CHECKING:
+    from campaigns.context import CampaignContext
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +44,24 @@ class DecisionOutput(BaseModel):
 
 # ── Validation helpers ────────────────────────────────────────────────────────
 
-def _enforce_score_integrity(data: dict, lead_id: str) -> dict:
+def _enforce_score_integrity(
+    data: dict,
+    lead_id: str,
+    weights: Optional[dict] = None,
+    qualified_threshold: Optional[int] = None,
+    disqualified_threshold: Optional[int] = None,
+) -> dict:
     """
     Python-side guard: clamp each sub-score to its configured maximum, re-sum,
     and re-derive decision. Guarantees score is always in [0, 100] and the
     decision always matches the threshold, regardless of what the model returned.
     """
+    effective_weights = weights or config.SCORE_WEIGHTS
+    effective_qt = qualified_threshold if qualified_threshold is not None else config.QUALIFIED_THRESHOLD
+    effective_dt = disqualified_threshold if disqualified_threshold is not None else config.DISQUALIFIED_THRESHOLD
+
     # Step 1: clamp each sub-score to [0, max_weight]
-    for field_name, max_val in config.SCORE_WEIGHTS.items():
+    for field_name, max_val in effective_weights.items():
         raw = data.get(field_name, 0)
         clamped = max(0, min(int(raw), max_val))
         if clamped != raw:
@@ -59,7 +72,7 @@ def _enforce_score_integrity(data: dict, lead_id: str) -> dict:
         data[field_name] = clamped
 
     # Step 2: re-sum from clamped values
-    sub_scores = sum(data[f] for f in config.SCORE_WEIGHTS)
+    sub_scores = sum(data[f] for f in effective_weights)
 
     if data.get("score") != sub_scores:
         logger.warning(
@@ -69,9 +82,9 @@ def _enforce_score_integrity(data: dict, lead_id: str) -> dict:
         data["score"] = sub_scores
 
     score = data["score"]
-    if score >= config.QUALIFIED_THRESHOLD:
+    if score >= effective_qt:
         correct_decision = "qualified"
-    elif score < config.DISQUALIFIED_THRESHOLD:
+    elif score < effective_dt:
         correct_decision = "disqualified"
     else:
         correct_decision = "review"
@@ -86,7 +99,14 @@ def _enforce_score_integrity(data: dict, lead_id: str) -> dict:
     return data
 
 
-def _parse_response(raw: str, lead_id: str, hard_disqualifiers: list[str]) -> DecisionOutput:
+def _parse_response(
+    raw: str,
+    lead_id: str,
+    hard_disqualifiers: list[str],
+    weights: Optional[dict] = None,
+    qualified_threshold: Optional[int] = None,
+    disqualified_threshold: Optional[int] = None,
+) -> DecisionOutput:
     """Parse and validate the Stage 2 response."""
     text = raw.strip()
     if text.startswith("```"):
@@ -106,8 +126,13 @@ def _parse_response(raw: str, lead_id: str, hard_disqualifiers: list[str]) -> De
         if not data.get("disqualification_reasons"):
             data["disqualification_reasons"] = hard_disqualifiers
 
-    # Enforce score integrity
-    data = _enforce_score_integrity(data, lead_id)
+    # Enforce score integrity using campaign-specific weights/thresholds when provided
+    data = _enforce_score_integrity(
+        data, lead_id,
+        weights=weights,
+        qualified_threshold=qualified_threshold,
+        disqualified_threshold=disqualified_threshold,
+    )
 
     return DecisionOutput(**data)
 
@@ -123,6 +148,7 @@ def _parse_response(raw: str, lead_id: str, hard_disqualifiers: list[str]) -> De
 async def make_decision(
     client:   LiteLLMClient,
     evidence: EvidenceOutput,
+    campaign: Optional["CampaignContext"] = None,
 ) -> DecisionOutput:
     """
     Call the configured LLM for Stage 2 scoring and qualification.
@@ -130,14 +156,20 @@ async def make_decision(
     Args:
         client:   Shared LiteLLM client instance
         evidence: Stage 1 EvidenceOutput — this is the ONLY input to Stage 2
+        campaign: Optional CampaignContext; if None falls back to hardcoded Seedance prompt + config weights
 
     Returns:
         DecisionOutput with score, sub-scores, decision, and reasoning
     """
-    lead_id      = evidence.lead_id
+    lead_id       = evidence.lead_id
     evidence_dict = evidence.model_dump()
 
-    logger.info("Stage 2 → lead_id=%s", lead_id)
+    system_prompt = campaign.stage2_system_prompt if campaign is not None else build_stage2_system()
+    weights = campaign.score_weights if campaign is not None else None
+    qt = campaign.qualified_threshold if campaign is not None else None
+    dt = campaign.disqualified_threshold if campaign is not None else None
+
+    logger.info("Stage 2 → lead_id=%s campaign=%s", lead_id, campaign.id if campaign else "seedance")
     logger.debug(
         "Stage 2 input lead_id=%s: %s",
         lead_id,
@@ -145,13 +177,16 @@ async def make_decision(
     )
 
     raw_text = await client.generate(
-        system_prompt = build_stage2_system(),
+        system_prompt = system_prompt,
         messages      = build_stage2_messages(evidence_dict),
         max_tokens    = 1024,
     )
     logger.debug("Stage 2 raw response for lead_id=%s: %s", lead_id, raw_text[:300])
 
-    decision = _parse_response(raw_text, lead_id, evidence.hard_disqualifiers)
+    decision = _parse_response(
+        raw_text, lead_id, evidence.hard_disqualifiers,
+        weights=weights, qualified_threshold=qt, disqualified_threshold=dt,
+    )
     logger.info(
         "Stage 2 done → lead_id=%s | decision=%s | score=%d | confidence=%s",
         lead_id, decision.decision, decision.score, decision.confidence,
