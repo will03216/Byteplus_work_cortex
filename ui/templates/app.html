@@ -1,0 +1,2439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cortex · Lead Pipeline</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d0e0f; --bg2: #141516; --bg3: #1c1e20;
+  --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
+  --text: #f0ede8; --text2: #9b9790; --text3: #5c5a57;
+  --green: #4ade80; --green-bg: rgba(74,222,128,0.08);
+  --amber: #fbbf24; --amber-bg: rgba(251,191,36,0.08);
+  --red: #f87171; --red-bg: rgba(248,113,113,0.08);
+  --blue: #60a5fa; --accent: #c8ff57;
+}
+body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size:16px; min-height: 100vh; line-height: 1.6; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* ── App shell ── */
+#app-shell { display:none; }
+#app-shell.active { display:grid; grid-template-columns:248px minmax(0, 1fr); min-height:100vh; }
+.app-sidebar { background:var(--bg2); border-right:1px solid var(--border); padding:26px 18px; position:sticky; top:0; height:100vh; overflow-y:auto; display:flex; flex-direction:column; gap:26px; }
+.app-main { min-width:0; }
+.app-screen { min-height:100vh; padding:32px 36px; }
+.page-kicker { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; letter-spacing:0.1em; text-transform:uppercase; margin-bottom:6px; }
+.panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:18px; }
+.panel-title { font-size:18px; font-weight:700; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.panel-sub { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:3px; }
+.nav-block { display:flex; flex-direction:column; gap:8px; }
+.nav-block.bottom { margin-top:auto; padding-top:12px; border-top:1px solid var(--border); }
+.nav-label { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; letter-spacing:0.1em; text-transform:uppercase; }
+.nav-list { display:flex; flex-direction:column; gap:6px; }
+.nav-btn { display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; padding:10px 12px; border-radius:8px; border:1px solid transparent; background:transparent; color:var(--text2); font-family:inherit; font-size:15px; cursor:pointer; transition:all 0.15s; text-align:left; }
+.nav-btn:hover { background:var(--bg3); color:var(--text1); border-color:var(--border); }
+.nav-btn.active { background:var(--bg3); color:var(--text1); border-color:var(--border2); }
+.nav-btn-tag { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.nav-btn.active .nav-btn-tag { color:var(--accent); }
+.toolbar-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 15px; border-radius:8px; border:1px solid var(--border2); background:var(--bg2); color:var(--text2); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; transition:all 0.15s; letter-spacing:0.04em; }
+.toolbar-btn:hover { background:var(--bg3); color:var(--text1); border-color:var(--text3); }
+.toolbar-btn.primary { background:var(--accent); color:#0d0e0f; border-color:var(--accent); font-weight:700; }
+.toolbar-btn.primary:hover { background:#d4ff3a; color:#0d0e0f; }
+.toolbar-btn.danger:hover { background:var(--red-bg); color:var(--red); border-color:var(--red); }
+.toolbar-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.results-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:22px; }
+.results-filter-row { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:18px; flex-wrap:wrap; }
+.filter-bar { display:flex; gap:8px; flex-wrap:wrap; }
+.filter-chip { display:flex; align-items:center; gap:8px; padding:8px 13px; border-radius:999px; border:1px solid var(--border); background:var(--bg2); color:var(--text2); font-size:14px; cursor:pointer; transition:all 0.15s; }
+.filter-chip:hover { color:var(--text1); border-color:var(--border2); }
+.filter-chip.active { color:var(--text1); border-color:var(--border2); background:var(--bg3); }
+.filter-chip .count { font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; color:var(--text3); }
+.runs-strip { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; margin-bottom:24px; }
+.runs-strip .run-item { min-width:220px; background:var(--bg2); border-color:var(--border); }
+.home-shell { display:flex; flex-direction:column; gap:24px; }
+.home-hero { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+.home-grid { display:grid; grid-template-columns:minmax(0, 1fr); gap:18px; align-items:start; }
+.home-panel { background:var(--bg2); border:1px solid var(--border); border-radius:16px; padding:20px; }
+.campaign-view-shell { display:flex; flex-direction:column; gap:24px; }
+.campaign-runs-list { display:flex; flex-direction:column; gap:10px; }
+.campaign-runs-list .run-item { background:var(--bg3); border-color:var(--border); }
+.campaign-runs-list .run-item:hover,
+.campaign-runs-list .run-item.current { background:var(--bg); }
+.campaign-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:14px; align-items:start; }
+@media (max-width: 1200px) { .campaign-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .campaign-grid { grid-template-columns:minmax(0, 1fr); } }
+.campaign-card { background:var(--bg3); border:1px solid var(--border); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:14px; cursor:pointer; transition:all 0.15s; }
+.campaign-card:hover { border-color:var(--border2); transform:translateY(-1px); }
+.campaign-card.active { border-color:var(--accent); box-shadow:0 0 0 1px rgba(200,255,87,0.2) inset; }
+.campaign-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.campaign-card-title { font-size:19px; font-weight:700; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.campaign-card-desc { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; line-height:1.6; margin-top:4px; }
+.campaign-card-stats { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+.campaign-stat { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+.campaign-stat-label { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:5px; }
+.campaign-stat-value { font-size:22px; font-weight:700; line-height:1; }
+.runs-stack { display:flex; flex-direction:column; gap:8px; }
+.empty-state { padding:14px 0; color:var(--text3); font-size:13px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+
+/* ── Upload ── */
+.upload-modal { background:var(--bg2); border:1px solid var(--border2); border-radius:16px; width:min(980px, 92vw); max-height:min(84vh, 900px); display:flex; flex-direction:column; overflow:hidden; }
+.upload-modal-body { padding:20px; display:grid; grid-template-columns:minmax(0, 1fr) 320px; gap:18px; overflow:auto; }
+.upload-shell { display:flex; flex-direction:column; gap:18px; }
+.logo-wrap { display:flex; align-items:center; gap:10px; }
+.logo-link { color:inherit; text-decoration:none; cursor:pointer; }
+.logo-link:hover .logo-text { color:var(--accent); }
+.logo-mark { width:32px; height:32px; background:var(--accent); border-radius:8px; display:flex; align-items:center; justify-content:center; }
+.logo-mark svg { width:16px; height:16px; }
+.logo-text { font-size:17px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.logo-sub { font-size:12px; color:var(--text3); letter-spacing:0.04em; }
+.upload-card { width:100%; background:var(--bg2); border:1px solid var(--border); border-radius:16px; padding:28px; display:flex; flex-direction:column; gap:20px; }
+.upload-history-card { width:100%; background:var(--bg2); border:1px solid var(--border); border-radius:16px; padding:18px; display:flex; flex-direction:column; gap:12px; }
+.upload-history-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.upload-history-title { font-size:13px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); letter-spacing:0.08em; text-transform:uppercase; }
+.upload-history-sub { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.upload-runs { display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; }
+.upload-card-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.upload-card h2 { font-size:24px; font-weight:700; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.upload-card p { font-size:14px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:3px; }
+.dropzone { border:1px dashed var(--border2); border-radius:10px; padding:28px 20px; cursor:pointer; transition:all 0.15s; display:flex; flex-direction:column; align-items:center; gap:10px; min-height:110px; text-align:center; background:var(--bg3); }
+.dropzone:hover, .dropzone.drag-over { border-color:var(--accent); background:rgba(200,255,87,0.04); }
+.dropzone svg { color:var(--text3); transition:color 0.15s; }
+.dropzone.drag-over svg { color:var(--accent); }
+.drop-hint-text { font-size:16px; color:var(--text2); }
+.drop-hint-sub { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.file-info { display:none; flex-direction:column; align-items:center; gap:5px; }
+.file-info.show { display:flex; }
+.file-icon { color:var(--accent); }
+.file-name-text { font-size:15px; font-weight:600; }
+.file-size-text { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.option-row { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:var(--bg3); border-radius:8px; border:1px solid var(--border); }
+.option-label { font-size:14px; color:var(--text2); }
+.option-label span { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:12px; margin-left:5px; }
+.conc-wrap { display:flex; align-items:center; gap:8px; }
+.conc-val { font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:16px; font-weight:600; color:var(--accent); min-width:22px; text-align:center; }
+.conc-btn { width:24px; height:24px; border-radius:5px; border:1px solid var(--border2); background:var(--bg2); color:var(--text2); cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; transition:all 0.1s; line-height:1; }
+.conc-btn:hover { background:var(--bg3); color:var(--text); }
+.submit-btn { width:100%; padding:14px; border-radius:10px; border:none; background:var(--accent); color:#0d0e0f; font-family:inherit; font-size:16px; font-weight:700; cursor:pointer; transition:all 0.15s; letter-spacing:0.02em; }
+.submit-btn:hover:not(:disabled) { background:#d4ff3a; transform:translateY(-1px); }
+.submit-btn:disabled { opacity:0.3; cursor:not-allowed; }
+.link-btn { background:none; border:none; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; padding:6px; transition:color 0.15s; letter-spacing:0.03em; }
+.link-btn:hover { color:var(--text2); }
+
+/* ── Progress ── */
+.progress-shell { min-height:100vh; max-width:780px; margin:0 auto; padding:48px 32px; display:flex; flex-direction:column; gap:28px; }
+.progress-title-row { display:flex; align-items:center; gap:12px; }
+.progress-title { font-size:26px; font-weight:700; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.progress-spinner { width:18px; height:18px; border:2px solid var(--border2); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.done-check { width:18px; height:18px; color:var(--green); flex-shrink:0; }
+.prog-counters { display:flex; gap:14px; flex-wrap:wrap; }
+.pcounter { display:flex; flex-direction:column; gap:2px; padding:10px 16px; border-radius:8px; background:var(--bg2); border:1px solid var(--border); min-width:80px; }
+.pcount { font-size:30px; font-weight:700; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; line-height:1; }
+.pcounter.grey .pcount { color:var(--text2); }
+.pcounter.green .pcount { color:var(--green); }
+.pcounter.amber .pcount { color:var(--amber); }
+.pcounter.red .pcount { color:var(--red); }
+.plabel { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; text-transform:uppercase; letter-spacing:0.05em; }
+.log-terminal { flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:14px 16px; overflow-y:auto; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; line-height:1.75; max-height:480px; min-height:260px; }
+.log-line { color:var(--text3); }
+.log-qual { color:var(--green); }
+.log-rev  { color:var(--amber); }
+.log-err  { color:var(--red); }
+.log-info { color:var(--text2); }
+
+/* ── Results shell ── */
+.results-shell { min-height:100vh; }
+.sidebar { background:var(--bg2); border-right:1px solid var(--border); padding:24px 18px; position:sticky; top:0; height:100vh; overflow-y:auto; display:flex; flex-direction:column; gap:26px; }
+.sidebar-label { font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); margin-bottom:8px; }
+.sidebar-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+.sidebar-head .sidebar-label { margin-bottom:0; }
+.see-all-btn { background:none; border:none; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; padding:0; transition:color 0.15s; }
+.see-all-btn:hover { color:var(--text2); }
+.see-all-btn.hidden { display:none; }
+.filter-group { display:flex; flex-direction:column; gap:3px; }
+.filter-btn { display:flex; align-items:center; justify-content:space-between; padding:7px 10px; border-radius:6px; border:none; background:transparent; color:var(--text2); font-family:inherit; font-size:13px; cursor:pointer; transition:all 0.15s; text-align:left; width:100%; }
+.filter-btn:hover { background:var(--bg3); color:var(--text); }
+.filter-btn.active { background:var(--bg3); color:var(--text); }
+.filter-btn .count { font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; padding:1px 6px; border-radius:4px; background:var(--bg); color:var(--text3); }
+.filter-btn.active .count { color:var(--text2); }
+
+/* Past runs list */
+.past-runs { display:flex; flex-direction:column; gap:3px; }
+.run-item { padding:8px 10px; border-radius:6px; cursor:pointer; transition:background 0.12s; border:1px solid transparent; }
+.run-item:hover { background:var(--bg3); }
+.run-item.current { background:var(--bg3); border-color:var(--border2); }
+.run-item-name { font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500; }
+.run-item-meta { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:2px; }
+.run-item-badges { display:flex; gap:4px; margin-top:5px; flex-wrap:wrap; }
+.run-micro-badge { font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:2px 6px; border-radius:3px; font-weight:600; }
+.run-micro-badge.qualified    { background:var(--green-bg); color:var(--green); }
+.run-micro-badge.review       { background:var(--amber-bg); color:var(--amber); }
+.run-micro-badge.disqualified { background:var(--red-bg);   color:var(--red); }
+.campaign-badge { font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:2px 7px; border-radius:3px; font-weight:600; background:rgba(200,255,87,0.1); color:var(--accent); border:1px solid rgba(200,255,87,0.2); }
+.run-status-dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:4px; }
+.run-status-dot.done  { background:var(--green); }
+.run-status-dot.error { background:var(--red); }
+.run-status-dot.running { background:var(--amber); animation:pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.dim-list { display:flex; flex-direction:column; gap:7px; }
+.dim-row { display:flex; justify-content:space-between; align-items:center; }
+.dim-dot-label { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.dim-dot { width:7px; height:7px; border-radius:2px; }
+.dim-max { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.stats-block { display:flex; flex-direction:column; gap:8px; }
+.stat-row { display:flex; justify-content:space-between; align-items:center; }
+.stat-label { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.stat-val { font-size:13px; font-weight:600; }
+.sidebar-actions { display:flex; flex-direction:column; gap:6px; margin-top:auto; }
+.sidebar-btn { display:block; width:100%; padding:7px 10px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; cursor:pointer; transition:all 0.15s; text-align:center; letter-spacing:0.04em; }
+.sidebar-btn:hover { background:var(--bg3); color:var(--text2); border-color:var(--border2); }
+.sidebar-btn.danger:hover { background:var(--red-bg); color:var(--red); border-color:var(--red); }
+
+/* ── Results main ── */
+.results-main { padding:30px 34px; overflow-y:auto; }
+.page-header { margin-bottom:26px; }
+.page-title { font-size:30px; font-weight:700; letter-spacing:-0.02em; margin-bottom:3px; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.page-meta { font-size:14px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.summary-row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:24px; }
+.scard { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:14px 16px; transition:border-color 0.15s; }
+.scard:hover { border-color:var(--border2); }
+.scard-label { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; letter-spacing:0.05em; margin-bottom:6px; }
+.scard-val { font-size:30px; font-weight:700; line-height:1; }
+.scard-val.green { color:var(--green); }
+.scard-val.amber { color:var(--amber); }
+.scard-val.red   { color:var(--red); }
+.results-load-state { padding:14px 4px 22px; font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; text-align:center; }
+
+/* ── Lead rows ── */
+.leads-grid { display:flex; flex-direction:column; gap:7px; }
+.lead-row { background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden; transition:border-color 0.15s; animation:fadeIn 0.2s ease both; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1} }
+.lead-row:hover { border-color:var(--border2); }
+.lead-summary { display:grid; grid-template-columns:36px 1fr 100px 80px auto 28px; align-items:center; gap:14px; padding:13px 16px; cursor:pointer; user-select:none; }
+.avatar { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex-shrink:0; }
+.lead-name { font-size:16px; font-weight:600; }
+.lead-company { font-size:13px; color:var(--text3); margin-top:1px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.lead-company-extra { font-size:13px; color:var(--text3); margin-top:2px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.mini-bars { display:flex; align-items:flex-end; gap:3px; height:20px; }
+.mini-bar { width:10px; border-radius:2px; }
+.decision-badge { font-size:11px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; padding:4px 9px; border-radius:4px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.decision-badge.qualified    { background:var(--green-bg); color:var(--green); }
+.decision-badge.review       { background:var(--amber-bg); color:var(--amber); }
+.decision-badge.disqualified { background:var(--red-bg);   color:var(--red); }
+.score-num { font-size:24px; font-weight:700; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; line-height:1; }
+.score-num.green { color:var(--green); }
+.score-num.amber { color:var(--amber); }
+.score-num.red   { color:var(--red); }
+.chevron { color:var(--text3); font-size:11px; transition:transform 0.2s; display:flex; align-items:center; justify-content:center; }
+.lead-row.open .chevron { transform:rotate(90deg); }
+.lead-detail { display:none; padding:0 16px 16px; border-top:1px solid var(--border); }
+.lead-row.open .lead-detail { display:block; }
+.detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px; padding-top:16px; }
+.detail-section-title { font-size:11px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-bottom:10px; }
+.score-bars { display:flex; flex-direction:column; gap:9px; }
+.bar-row { display:flex; align-items:center; gap:10px; }
+.bar-label { font-size:13px; color:var(--text2); width:106px; flex-shrink:0; }
+.bar-track { flex:1; height:4px; background:var(--bg3); border-radius:2px; overflow:hidden; }
+.bar-fill { height:100%; border-radius:2px; }
+.bar-score { font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); min-width:36px; text-align:right; }
+.reason-list { display:flex; flex-direction:column; gap:7px; }
+.reason-item { font-size:14px; color:var(--text2); line-height:1.5; padding-left:13px; position:relative; }
+.reason-item::before { content:''; position:absolute; left:0; top:7px; width:5px; height:5px; border-radius:50%; }
+.reason-item.pos::before { background:var(--green); }
+.reason-item.neg::before { background:var(--red); }
+.use-case-box { margin-top:12px; padding:9px 11px; background:var(--bg3); border-radius:6px; border-left:2px solid var(--border2); font-size:14px; color:var(--text2); line-height:1.55; }
+.use-case-label { font-size:11px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); margin-bottom:3px; letter-spacing:0.05em; text-transform:uppercase; }
+.detail-links { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+.detail-link { display:inline-flex; align-items:center; font-size:13px; color:var(--accent); text-decoration:none; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; letter-spacing:0.02em; }
+.detail-link:hover { text-decoration:underline; }
+.detail-source { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; line-height:1.5; }
+.conf-badge { font-size:11px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:2px 6px; border-radius:3px; background:var(--bg3); color:var(--text3); }
+.detail-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+.meta-pill { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; background:var(--bg3); color:var(--text2); font-size:11px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; letter-spacing:0.03em; }
+.ev-section { margin-top:14px; }
+.ev-item { font-size:14px; color:var(--text2); line-height:1.55; padding:2px 0 2px 12px; position:relative; }
+.ev-item::before { content:''; position:absolute; left:0; top:8px; width:4px; height:4px; border-radius:50%; background:var(--text3); }
+.ev-item.inferred::before { background:var(--blue); opacity:0.5; }
+.ev-item.unknown::before  { background:var(--amber); opacity:0.4; }
+.ev-item.hard-dis::before { background:var(--red); }
+.signal-badge { display:inline-block; padding:3px 8px; border-radius:4px; font-size:11px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:var(--bg3); color:var(--text3); margin-bottom:8px; }
+
+/* ── Email preview ── */
+.email-preview { margin-top:14px; border-top:1px solid var(--border); padding-top:14px; }
+.email-preview-title { font-size:11px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-bottom:10px; }
+.email-subject { display:flex; align-items:center; gap:8px; font-size:13px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); margin-bottom:8px; }
+.email-subject span { color:var(--text2); flex:1; }
+.email-body-wrap { position:relative; }
+.email-body { background:var(--bg3); border-radius:6px; padding:12px; font-size:13px; color:var(--text2); line-height:1.7; white-space:pre-wrap; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.copy-btn { cursor:pointer; padding:4px 10px; border-radius:5px; font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:var(--bg2); color:var(--text2); border:1px solid var(--border); white-space:nowrap; transition:all 0.15s; letter-spacing:0.03em; }
+.copy-btn:hover { background:var(--bg3); color:var(--text1); border-color:var(--text3); }
+.copy-btn.copied { color:var(--green); border-color:var(--green); background:rgba(74,222,128,0.08); }
+.email-body-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.email-body-label { font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.manual-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(96,165,250,0.1); color:#60a5fa; margin-bottom:8px; }
+.email-sent-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(74,222,128,0.1); color:var(--green); margin-bottom:8px; }
+/* ── Email status on run items ── */
+.email-status-badge { font-size:9px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:1px 5px; border-radius:3px; font-weight:600; }
+.email-status-badge.not_sent { background:rgba(255,255,255,0.05); color:var(--text3); }
+.email-status-badge.sent     { background:rgba(74,222,128,0.1); color:var(--green); }
+.email-status-badge.partial  { background:rgba(251,191,36,0.1); color:var(--amber); }
+
+/* ── Confirm modal ── */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:100; }
+.modal-overlay.hidden { display:none; }
+.modal { background:var(--bg2); border:1px solid var(--border2); border-radius:12px; padding:24px; max-width:360px; width:90%; }
+.runs-modal { background:var(--bg2); border:1px solid var(--border2); border-radius:14px; width:min(560px, 92vw); max-height:min(72vh, 760px); display:flex; flex-direction:column; overflow:hidden; }
+.runs-modal-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 18px 14px; border-bottom:1px solid var(--border); }
+.runs-modal-title { font-size:18px; font-weight:700; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.runs-modal-sub { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:3px; }
+.runs-modal-close { width:30px; height:30px; border-radius:8px; border:1px solid var(--border2); background:transparent; color:var(--text3); cursor:pointer; font-size:16px; line-height:1; transition:all 0.15s; }
+.runs-modal-close:hover { background:var(--bg3); color:var(--text); }
+.runs-modal-list { padding:12px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+.runs-modal-empty { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:8px 10px; }
+.runs-modal .run-item { background:var(--bg); }
+.runs-modal .run-item:hover { background:var(--bg3); }
+.modal h3 { font-size:20px; font-weight:700; margin-bottom:8px; }
+.modal p { font-size:15px; color:var(--text2); margin-bottom:20px; line-height:1.5; }
+.modal-actions { display:flex; gap:10px; justify-content:flex-end; }
+.modal-btn { padding:9px 16px; border-radius:7px; border:1px solid var(--border2); font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; }
+.modal-btn.cancel { background:transparent; color:var(--text2); }
+.modal-btn.cancel:hover { background:var(--bg3); }
+.modal-btn.confirm { background:var(--red-bg); color:var(--red); border-color:var(--red); }
+.modal-btn.confirm:hover { background:var(--red); color:#fff; }
+
+/* ── Settings screen ── */
+.settings-shell { min-height:100vh; }
+.settings-main { overflow-y:auto; padding:32px 36px; }
+.settings-section { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:24px; }
+/* ── Settings tabs ── */
+.stab-bar { display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:0; }
+.stab { padding:9px 16px; border-radius:8px 8px 0 0; font-size:13px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-weight:600; color:var(--text3); background:none; border:1px solid transparent; border-bottom:none; cursor:pointer; transition:all 0.15s; margin-bottom:-1px; }
+.stab:hover { color:var(--text2); }
+.stab.active { color:var(--text1); background:var(--bg2); border-color:var(--border); border-bottom-color:var(--bg2); }
+.stab-panel { display:none; }
+.stab-panel.active { display:block; }
+.settings-two-col { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+.settings-col { display:flex; flex-direction:column; gap:18px; }
+.settings-section-title { font-size:18px; font-weight:700; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin-bottom:4px; }
+.settings-section-sub { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-bottom:20px; line-height:1.6; }
+.threshold-row { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+.threshold-label { font-size:14px; color:var(--text2); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; flex:1; }
+.threshold-input { width:72px; background:var(--bg3); border:1px solid var(--border2); border-radius:6px; padding:7px 10px; color:var(--text1); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:16px; text-align:center; }
+.threshold-input:focus { outline:none; border-color:var(--text3); }
+.threshold-hint { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; white-space:nowrap; }
+.settings-save-btn { padding:9px 18px; border-radius:7px; background:var(--bg3); border:1px solid var(--border2); color:var(--text1); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; transition:all 0.15s; margin-top:4px; }
+.settings-save-btn:hover { border-color:var(--text3); }
+.settings-save-btn.saved { color:var(--green); border-color:var(--green); background:rgba(74,222,128,0.08); }
+.exclusion-add-row { display:flex; gap:8px; margin-bottom:14px; }
+.exclusion-input { flex:1; background:var(--bg3); border:1px solid var(--border2); border-radius:6px; padding:9px 12px; color:var(--text1); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:14px; }
+.exclusion-input::placeholder { color:var(--text3); }
+.exclusion-input:focus { outline:none; border-color:var(--text3); }
+.exclusion-list { display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto; }
+.exclusion-item { display:flex; align-items:center; justify-content:space-between; background:var(--bg3); border-radius:6px; padding:9px 12px; font-size:14px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text2); }
+.exclusion-del { background:none; border:none; color:var(--text3); cursor:pointer; font-size:16px; padding:0 2px; line-height:1; transition:color 0.15s; }
+.exclusion-del:hover { color:var(--red); }
+.exclusion-empty { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:6px 0; }
+.sidebar-btn.active-nav { border-color:var(--text3); color:var(--text1); }
+.leads-grid { transition: opacity 0.15s ease; }
+.lead-row.excluded { opacity:0.38; }
+.lead-row.excluded:hover { opacity:0.52; }
+.customer-badge { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(255,255,255,0.05); color:var(--text3); border:1px solid var(--border); margin-left:7px; vertical-align:middle; letter-spacing:0.03em; }
+.import-csv-row { display:flex; align-items:center; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.import-csv-label { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; flex:1; line-height:1.5; }
+.leads-grid.rerendering { opacity: 0; }
+.score-cell { display:flex; flex-direction:column; align-items:flex-end; gap:3px; min-width:52px; }
+.manual-email-badge { font-size:9px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:1px 5px; border-radius:3px; font-weight:600; white-space:nowrap; line-height:1.4; }
+.manual-email-badge.sent     { background:rgba(74,222,128,0.12); color:var(--green); border:1px solid rgba(74,222,128,0.25); }
+.manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
+
+/* ── Email Templates ── */
+.tmpl-list { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; max-height:none; overflow-y:visible; }
+.tmpl-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
+.tmpl-card-top { display:flex; align-items:flex-start; gap:10px; }
+.tmpl-vertical-badge { font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:2px 8px; border-radius:3px; font-weight:600; background:rgba(96,165,250,0.12); color:#60a5fa; border:1px solid rgba(96,165,250,0.2); white-space:nowrap; flex-shrink:0; margin-top:1px; }
+.tmpl-info { flex:1; min-width:0; }
+.tmpl-name { font-size:14px; font-weight:600; color:var(--text1); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tmpl-subject { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tmpl-actions { display:flex; gap:4px; flex-shrink:0; }
+.tmpl-btn { background:none; border:none; color:var(--text3); cursor:pointer; font-size:13px; padding:2px 5px; line-height:1; border-radius:4px; transition:all 0.15s; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.tmpl-btn:hover { color:var(--text1); background:var(--bg2); }
+.tmpl-btn.del:hover { color:var(--red); background:var(--red-bg); }
+.tmpl-btn.copied { color:var(--green); }
+.tmpl-edit-form { display:none; flex-direction:column; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.tmpl-edit-form.open { display:flex; }
+.tmpl-empty { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:6px 0; }
+.tmpl-add-form { border-top:1px solid var(--border); margin-top:6px; padding-top:16px; display:none; flex-direction:column; gap:10px; }
+.tmpl-add-form.open { display:flex; }
+.tmpl-form-row { display:flex; flex-direction:column; gap:4px; }
+.tmpl-form-label { font-size:11px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); letter-spacing:0.06em; text-transform:uppercase; }
+.tmpl-form-input { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:9px 11px; color:var(--text1); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:14px; }
+.tmpl-form-input:focus { outline:none; border-color:var(--text3); }
+select.tmpl-form-input { appearance:none; cursor:pointer; }
+.tmpl-form-textarea { background:var(--bg); border:1px solid var(--border2); border-radius:6px; padding:11px 13px; color:var(--text1); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:14px; resize:vertical; min-height:260px; line-height:1.65; width:100%; box-sizing:border-box; }
+.tmpl-form-textarea:focus { outline:none; border-color:var(--text3); }
+.tmpl-form-hint { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.tmpl-form-actions { display:flex; gap:8px; }
+/* ── Toggle switch ── */
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; }
+.toggle-label { font-size:14px; color:var(--text1); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.toggle-sub { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:2px; line-height:1.5; }
+.toggle-switch { position:relative; width:42px; height:24px; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--bg3); border:1px solid var(--border2); border-radius:24px; transition:all 0.2s; }
+.toggle-slider:before { content:''; position:absolute; width:16px; height:16px; left:3px; top:3px; background:var(--text3); border-radius:50%; transition:all 0.2s; }
+.toggle-switch input:checked + .toggle-slider { background:rgba(74,222,128,0.15); border-color:var(--green); }
+.toggle-switch input:checked + .toggle-slider:before { background:var(--green); transform:translateX(18px); }
+.apollo-status { font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:6px; }
+.apollo-status.on  { color:var(--green); }
+.apollo-status.off { color:var(--text3); }
+</style>
+</head>
+<body>
+
+<div id="app-shell" class="active">
+  <aside class="app-sidebar">
+    <a class="logo-wrap logo-link" onclick="openHome()">
+      <div class="logo-mark"><svg viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="8" y="1" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="1" y="8" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="8" y="8" width="2" height="5" rx="1" fill="#0d0e0f"/></svg></div>
+      <div><div class="logo-text">Cortex</div><div class="logo-sub">Lead Pipeline</div></div>
+    </a>
+
+    <div class="nav-block">
+      <div class="nav-label">Navigation</div>
+      <div class="nav-list">
+        <button class="nav-btn active" id="nav-home" onclick="openHome()"><span>Home</span><span class="nav-btn-tag">Home</span></button>
+        <button class="nav-btn" id="nav-results" onclick="openLatestResults()"><span>Results</span><span class="nav-btn-tag">Latest run</span></button>
+      </div>
+    </div>
+
+    <div class="nav-block">
+      <div class="nav-label">Campaigns</div>
+      <div class="nav-list" id="sidebar-campaigns">
+        <div class="empty-state">Loading campaigns…</div>
+      </div>
+    </div>
+
+    <div class="nav-block bottom">
+      <div class="nav-label">Workspace</div>
+      <div class="nav-list">
+        <button class="nav-btn" id="nav-settings" onclick="openSettings()"><span>Settings</span><span class="nav-btn-tag">Global</span></button>
+      </div>
+    </div>
+
+  </aside>
+
+  <main class="app-main">
+    <section id="s-home" class="screen active app-screen">
+      <div class="home-shell">
+        <div class="home-hero">
+          <div>
+            <div class="page-kicker" id="home-kicker">Home</div>
+            <div class="page-title" id="home-title">Campaigns overview</div>
+            <div class="page-meta" id="home-meta">Choose a campaign, upload new CSVs, and jump back into recent runs.</div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="toolbar-btn primary" onclick="goToUpload('seedance')">New run</button>
+          </div>
+        </div>
+
+        <div class="summary-row">
+          <div class="scard"><div class="scard-label">Runs</div><div class="scard-val" id="home-sum-runs">—</div></div>
+          <div class="scard"><div class="scard-label">Leads processed</div><div class="scard-val" id="home-sum-leads">—</div></div>
+          <div class="scard"><div class="scard-label">Qualified</div><div class="scard-val green" id="home-sum-qual">—</div></div>
+          <div class="scard"><div class="scard-label">Review + disqualified</div><div class="scard-val amber" id="home-sum-other">—</div></div>
+        </div>
+
+        <div class="home-grid">
+          <div class="home-panel" id="home-campaigns-panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Campaigns</div>
+                <div class="panel-sub">Campaigns are first-class objects now, not just an upload dropdown.</div>
+              </div>
+            </div>
+            <div class="campaign-grid" id="home-campaigns-grid">
+              <div class="empty-state">Loading campaigns…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s-campaign" class="screen app-screen">
+      <div class="campaign-view-shell">
+        <div class="home-hero">
+          <div>
+            <div class="page-kicker">Campaign</div>
+            <div class="page-title" id="campaign-view-title">Campaign</div>
+            <div class="page-meta" id="campaign-view-meta">Campaign runs</div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="toolbar-btn primary" onclick="goToUpload(currentCampaignId)">Upload CSV</button>
+          </div>
+        </div>
+
+        <div class="summary-row">
+          <div class="scard"><div class="scard-label">Runs</div><div class="scard-val" id="campaign-sum-runs">—</div></div>
+          <div class="scard"><div class="scard-label">Leads processed</div><div class="scard-val" id="campaign-sum-leads">—</div></div>
+          <div class="scard"><div class="scard-label">Qualified</div><div class="scard-val green" id="campaign-sum-qual">—</div></div>
+          <div class="scard"><div class="scard-label">Review + disqualified</div><div class="scard-val amber" id="campaign-sum-other">—</div></div>
+        </div>
+
+        <div class="home-panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">All runs</div>
+              <div class="panel-sub" id="campaign-runs-sub">Every run for this campaign</div>
+            </div>
+          </div>
+          <div class="campaign-runs-list" id="campaign-runs-list">
+            <div class="empty-state">Loading runs…</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s-results" class="screen app-screen">
+      <main class="results-main">
+        <div class="results-toolbar">
+          <div class="page-header" style="margin-bottom:0;">
+            <div class="page-kicker">Results</div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px;">
+              <div class="page-title">Lead Qualification</div>
+              <span class="campaign-badge" id="page-campaign-badge" style="font-size:11px;padding:2px 10px;border-radius:4px;display:none;"></span>
+            </div>
+            <div class="page-meta" id="page-meta">—</div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="toolbar-btn" id="send-instantly-btn" onclick="openSendModal()">Send to Instantly</button>
+            <button class="toolbar-btn" onclick="exportRun()">Export CSV</button>
+            <button class="toolbar-btn danger" onclick="confirmDelete()">Delete run</button>
+          </div>
+        </div>
+
+        <div class="results-filter-row">
+          <div class="filter-bar">
+            <button class="filter-chip active" data-filter="all" onclick="filterLeads('all',this)">All leads <span class="count" id="cnt-all">0</span></button>
+            <button class="filter-chip" data-filter="qualified" onclick="filterLeads('qualified',this)">Qualified <span class="count" id="cnt-qual">0</span></button>
+            <button class="filter-chip" data-filter="review" onclick="filterLeads('review',this)">For review <span class="count" id="cnt-rev">0</span></button>
+            <button class="filter-chip" data-filter="disqualified" onclick="filterLeads('disqualified',this)">Disqualified <span class="count" id="cnt-dis">0</span></button>
+          </div>
+          <button class="toolbar-btn primary" onclick="goToUpload(currentCampaignId)">New run</button>
+        </div>
+
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Recent runs</div>
+            <div class="panel-sub" id="results-runs-sub">Jump between recent campaign runs.</div>
+          </div>
+          <button class="see-all-btn hidden" id="results-see-all-runs-btn" onclick="openRunsModal()">See all</button>
+        </div>
+        <div class="runs-strip" id="results-runs-list">
+          <div class="empty-state">No runs loaded yet.</div>
+        </div>
+
+        <div class="summary-row">
+          <div class="scard"><div class="scard-label">Total leads</div><div class="scard-val" id="sum-total">—</div></div>
+          <div class="scard"><div class="scard-label">Qualified</div><div class="scard-val green" id="sum-qual">—</div></div>
+          <div class="scard"><div class="scard-label">For review</div><div class="scard-val amber" id="sum-rev">—</div></div>
+          <div class="scard"><div class="scard-label">Disqualified</div><div class="scard-val red" id="sum-dis">—</div></div>
+        </div>
+        <div class="leads-grid" id="leads"></div>
+        <div class="results-load-state" id="results-load-state"></div>
+      </main>
+    </section>
+
+<!-- ── Delete confirm modal ── -->
+<div class="modal-overlay hidden" id="delete-modal">
+  <div class="modal">
+    <h3>Delete this run?</h3>
+    <p>All leads and scores for this run will be permanently removed from the database. This cannot be undone.</p>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeModal()">Cancel</button>
+      <button class="modal-btn confirm" onclick="deleteCurrentRun()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="send-modal">
+  <div class="modal">
+    <h3>Send to Instantly</h3>
+    <p id="send-modal-body">Loading eligible leads...</p>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeSendModal()">Cancel</button>
+      <button class="modal-btn" id="send-modal-confirm" style="background:var(--green-bg);color:var(--green);border-color:var(--green);" onclick="confirmSendEmails()">Send</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="runs-modal" onclick="if(event.target===this) closeRunsModal()">
+  <div class="runs-modal">
+    <div class="runs-modal-head">
+      <div>
+        <div class="runs-modal-title">All previous runs</div>
+        <div class="runs-modal-sub" id="runs-modal-count">0 runs</div>
+      </div>
+      <button class="runs-modal-close" onclick="closeRunsModal()">×</button>
+    </div>
+    <div class="runs-modal-list" id="runs-modal-list">
+      <div class="runs-modal-empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Email sent confirmation modal (blocking — no dismiss on backdrop) ── -->
+<div class="modal-overlay hidden" id="email-confirm-modal">
+  <div class="modal" style="max-width:380px;">
+    <h3 id="email-confirm-title" style="margin-bottom:10px;">Did you send this email?</h3>
+    <p id="email-confirm-sub" style="margin-bottom:24px;">Mark whether you sent the email to <strong id="email-confirm-name"></strong> at <strong id="email-confirm-company"></strong>.</p>
+    <div class="modal-actions" style="justify-content:stretch;gap:10px;">
+      <button class="modal-btn" id="email-confirm-no" style="flex:1;background:var(--bg3);color:var(--text2);" onclick="confirmEmailStatus('not_sent')">No, didn't send</button>
+      <button class="modal-btn confirm" id="email-confirm-yes" style="flex:1;background:var(--green-bg);color:var(--green);border-color:var(--green);" onclick="confirmEmailStatus('sent')">Yes, sent it ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Screen 4: Settings ── -->
+    <section id="s-settings" class="screen app-screen">
+      <main class="settings-main" style="padding:0;">
+        <div class="results-toolbar">
+          <div class="page-header" style="margin-bottom:0;">
+            <div class="page-kicker" id="settings-kicker">Settings</div>
+            <div class="page-title">Settings</div>
+            <div class="page-meta" id="settings-meta">Pipeline configuration</div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="toolbar-btn" onclick="backToResults()">Back to results</button>
+          </div>
+        </div>
+
+      <div class="page-header">
+        <div class="page-meta">Tune thresholds, exclusions, and templates.</div>
+      </div>
+
+      <!-- Tab bar -->
+      <div class="stab-bar">
+        <button class="stab active" id="stab-pipeline"    onclick="switchSettingsTab('pipeline')">Pipeline</button>
+        <button class="stab"        id="stab-exclusions"  onclick="switchSettingsTab('exclusions')">Exclusions</button>
+        <button class="stab"        id="stab-templates"   onclick="switchSettingsTab('templates')">Email Templates</button>
+      </div>
+
+      <!-- Tab: Pipeline -->
+      <div class="stab-panel active" id="stab-panel-pipeline">
+        <div class="settings-two-col">
+          <div class="settings-col">
+            <!-- Score Thresholds -->
+            <div class="settings-section">
+              <div class="settings-section-title">Score Thresholds</div>
+              <div class="settings-section-sub">Leads are reclassified instantly using your saved thresholds — no need to re-run the pipeline.</div>
+              <div class="threshold-row">
+                <span class="threshold-label">Qualified if score ≥</span>
+                <input type="number" class="threshold-input" id="input-qual-threshold" min="1" max="100" value="70">
+              </div>
+              <div class="threshold-row">
+                <span class="threshold-label">Review if score ≥</span>
+                <input type="number" class="threshold-input" id="input-dis-threshold" min="1" max="100" value="60">
+                <span class="threshold-hint">below this = disqualified</span>
+              </div>
+              <button class="settings-save-btn" id="save-thresholds-btn" onclick="saveThresholds()">Save thresholds</button>
+            </div>
+          </div>
+          <div class="settings-col">
+            <!-- Apollo Integration -->
+            <div class="settings-section">
+              <div class="settings-section-title">Apollo Integration</div>
+              <div class="settings-section-sub">When enabled, the pipeline enriches leads with Apollo company data (headcount, funding, tech stack). Requires <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">APOLLO_API_KEY</code> to be set.</div>
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Enable Apollo enrichment</div>
+                  <div id="apollo-status" class="apollo-status off">Disabled</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="apollo-toggle" onchange="saveApollo()">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Exclusions -->
+      <div class="stab-panel" id="stab-panel-exclusions">
+        <div class="settings-section">
+          <div class="settings-section-title">Exclusion List</div>
+          <div class="settings-section-sub">Add company website URLs of existing customers (e.g. <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">imagineart.io</code>). Matched leads are greyed out in results and never sent to Instantly.</div>
+          <div class="exclusion-add-row">
+            <input type="text" class="exclusion-input" id="exclusion-input" placeholder="e.g. imagineart.io or https://veed.io" onkeydown="if(event.key==='Enter') addExclusion()">
+            <button class="settings-save-btn" onclick="addExclusion()">Add</button>
+          </div>
+          <div class="exclusion-list" id="exclusion-list">
+            <div class="exclusion-empty">No exclusions yet.</div>
+          </div>
+          <div class="import-csv-row">
+            <span class="import-csv-label">Bulk import from Trigify CSV — reads the COMPANY URL column automatically</span>
+            <input type="file" id="exclusion-csv-input" accept=".csv" style="display:none" onchange="importExclusionCsv(this)">
+            <button class="settings-save-btn" id="import-csv-btn" onclick="document.getElementById('exclusion-csv-input').click()">Import CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Email Templates -->
+      <div class="stab-panel" id="stab-panel-templates">
+        <div class="settings-section">
+          <div class="settings-section-title">Email Templates</div>
+          <div class="settings-section-sub">Templates are selected automatically based on the lead's industry vertical. Use <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{first_name}</code> and <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{company}</code> as placeholders.</div>
+          <div class="tmpl-list" id="tmpl-list"><div class="tmpl-empty">Loading...</div></div>
+          <button class="settings-save-btn" id="tmpl-add-btn" onclick="toggleTmplForm()">+ Add template</button>
+          <div class="tmpl-add-form" id="tmpl-add-form">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <div class="tmpl-form-row">
+                <label class="tmpl-form-label">Vertical</label>
+                <select class="tmpl-form-input" id="tmpl-vertical">
+                  <option value="ai_tools">AI Tools</option>
+                  <option value="film_production">Film Production</option>
+                  <option value="vfx_production">VFX Production</option>
+                  <option value="animation">Animation</option>
+                  <option value="short_drama">Short Drama</option>
+                  <option value="ecommerce">Ecommerce</option>
+                  <option value="ai_generic">AI Generic</option>
+                </select>
+              </div>
+              <div class="tmpl-form-row">
+                <label class="tmpl-form-label">Template name</label>
+                <input type="text" class="tmpl-form-input" id="tmpl-name" placeholder="e.g. Film Production – Version B">
+              </div>
+            </div>
+            <div class="tmpl-form-row">
+              <label class="tmpl-form-label">Subject</label>
+              <input type="text" class="tmpl-form-input" id="tmpl-subject" placeholder="e.g. Cortex 2.0 + {company}?">
+            </div>
+            <div class="tmpl-form-row">
+              <label class="tmpl-form-label">Body</label>
+              <textarea class="tmpl-form-textarea" id="tmpl-body" placeholder="Hi {first_name},&#10;&#10;...&#10;&#10;-- Antti"></textarea>
+              <span class="tmpl-form-hint">Use {first_name} and {company} for personalisation. For images, paste a public URL inline (e.g. https://example.com/image.png).</span>
+            </div>
+            <div class="tmpl-form-actions">
+              <button class="settings-save-btn" onclick="saveTmpl()">Save template</button>
+              <button class="settings-save-btn" onclick="toggleTmplForm()" style="color:var(--text3)">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      </main>
+    </section>
+  </main>
+</div>
+
+<div class="modal-overlay hidden" id="upload-modal" onclick="if(event.target===this) closeUploadModal()">
+  <div class="upload-modal">
+    <div class="runs-modal-head">
+      <div>
+        <div class="runs-modal-title">Upload CSV</div>
+        <div class="runs-modal-sub" id="upload-modal-sub">Trigify export for the active campaign</div>
+      </div>
+      <button class="runs-modal-close" onclick="closeUploadModal()">×</button>
+    </div>
+    <div class="upload-modal-body">
+      <div class="upload-shell">
+        <div class="upload-card">
+          <div>
+            <h2>Upload leads</h2>
+            <p>Trigify CSV export · each run is fully isolated</p>
+          </div>
+
+          <div id="dropzone" class="dropzone">
+            <div id="drop-hint" style="display:flex;flex-direction:column;align-items:center;gap:10px;">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <div class="drop-hint-text">Drop CSV here or click to browse</div>
+              <div class="drop-hint-sub">.csv · Trigify format</div>
+            </div>
+            <div id="file-info" class="file-info">
+              <svg class="file-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <div id="file-name-text" class="file-name-text">—</div>
+              <div id="file-size-text" class="file-size-text">—</div>
+            </div>
+          </div>
+          <input type="file" id="file-input" accept=".csv" style="display:none">
+
+          <div class="option-row">
+            <div class="option-label">Campaign <span>product context</span></div>
+            <select id="campaign-select" style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:5px 10px;color:var(--text);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;font-size:12px;cursor:pointer;outline:none;">
+              <option value="seedance">Seedance</option>
+              <option value="kling">Kling AI</option>
+            </select>
+          </div>
+
+          <div class="option-row">
+            <div class="option-label">Concurrency <span>parallel leads</span></div>
+            <div class="conc-wrap">
+              <button class="conc-btn" id="conc-dec">−</button>
+              <div class="conc-val" id="conc-display">10</div>
+              <button class="conc-btn" id="conc-inc">+</button>
+            </div>
+          </div>
+
+          <div class="upload-card-actions">
+            <button class="link-btn" onclick="viewExisting()">Open latest run →</button>
+            <button id="submit-btn" class="submit-btn" style="width:auto;min-width:180px;" disabled onclick="startRun()">Run Pipeline →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="upload-history-card">
+        <div class="upload-history-head">
+          <div class="upload-history-title">Historical runs</div>
+          <div class="upload-history-sub" id="upload-runs-count">Loading…</div>
+        </div>
+        <div class="upload-runs" id="upload-runs-list">
+          <div style="font-size:11px;color:var(--text3);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:4px 6px;">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Screen 2: Progress ── -->
+<section id="s-progress" class="screen">
+  <div class="progress-shell">
+    <div class="logo-wrap">
+      <div class="logo-mark"><svg viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="8" y="1" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="1" y="8" width="5" height="5" rx="1" fill="#0d0e0f"/><rect x="8" y="8" width="2" height="5" rx="1" fill="#0d0e0f"/></svg></div>
+      <div><div class="logo-text">Cortex</div><div class="logo-sub">Lead Pipeline</div></div>
+    </div>
+    <div>
+      <div class="progress-title-row" id="prog-title-row">
+        <div class="progress-spinner" id="prog-spinner"></div>
+        <div class="progress-title" id="prog-title">Processing leads…</div>
+      </div>
+    </div>
+    <div class="prog-counters">
+      <div class="pcounter grey"><div class="pcount" id="prog-total">0</div><div class="plabel">Processed</div></div>
+      <div class="pcounter green"><div class="pcount" id="prog-qual">0</div><div class="plabel">Qualified</div></div>
+      <div class="pcounter amber"><div class="pcount" id="prog-rev">0</div><div class="plabel">Review</div></div>
+      <div class="pcounter red"><div class="pcount" id="prog-dis">0</div><div class="plabel">Disqualified</div></div>
+    </div>
+    <div id="log-output" class="log-terminal"></div>
+  </div>
+</section>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let allLeads       = [];
+let allRuns        = [];
+let emailPreviews  = {};
+let appSettings    = { qualified_threshold: 70, disqualified_threshold: 60 };
+let exclusions     = [];
+let emailTemplates = [];
+let campaigns      = [];
+let campaignRunsById = {};
+let currentRunId   = null;
+let currentCampaignId = null;
+let selectedFile   = null;
+let concurrency    = 10;
+let currentFilter  = 'all';
+let visibleLeadCount = 0;
+
+const INITIAL_LEADS_PAGE = 50;
+const LEADS_PAGE_SIZE = 50;
+const LEADS_PREFETCH_OFFSET = 5;
+
+const MAX = { segment:30, workflow:15, pain:20, buyer:25, commercial:10 };
+const CLR = { segment:'#60a5fa', workflow:'#4ade80', pain:'#fb923c', buyer:'#c084fc', commercial:'#fbbf24' };
+const LBL = { segment:'Segment fit', workflow:'Workflow fit', pain:'Pain fit', buyer:'Buyer fit', commercial:'Commercial fit' };
+const PALETTES = [
+  ['#1a3a2a','#4ade80'],['#1a2a3a','#60a5fa'],['#2a1a3a','#c084fc'],
+  ['#3a2a1a','#fbbf24'],['#3a1a1a','#f87171'],['#1a3a38','#2dd4bf'],
+];
+
+// ── Screens ────────────────────────────────────────────────────────────────────
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  if (id === 's-results' || id === 's-upload') loadPastRuns();
+  if (id === 's-upload') clearRunIdFromUrl();
+}
+
+// ── Upload ─────────────────────────────────────────────────────────────────────
+const dropzone  = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+
+function setFile(file) {
+  selectedFile = file;
+  document.getElementById('drop-hint').style.display = 'none';
+  document.getElementById('file-info').classList.add('show');
+  document.getElementById('file-name-text').textContent = file.name;
+  document.getElementById('file-size-text').textContent = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('submit-btn').disabled = false;
+}
+
+document.getElementById('conc-dec').addEventListener('click', () => {
+  if (concurrency > 5) { concurrency--; document.getElementById('conc-display').textContent = concurrency; }
+});
+document.getElementById('conc-inc').addEventListener('click', () => {
+  if (concurrency < 20) { concurrency++; document.getElementById('conc-display').textContent = concurrency; }
+});
+
+async function startRun() {
+  if (!selectedFile) return;
+  const campaign = document.getElementById('campaign-select').value;
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+  fd.append('concurrency', concurrency);
+  fd.append('campaign', campaign);
+  resetProgress();
+  show('s-progress');
+  const { run_id } = await fetch('/api/run', { method:'POST', body:fd }).then(r => r.json());
+  currentRunId = run_id;
+  setRunIdInUrl(run_id);
+  connectSSE(run_id);
+}
+
+async function viewExisting() {
+  const runs = await fetch('/api/runs').then(r => r.json());
+  if (!runs.length) { alert('No runs found. Upload a CSV to get started.'); return; }
+  await loadRun(runs[0].run_id);
+}
+
+// ── Progress ───────────────────────────────────────────────────────────────────
+const pStats = { qual:0, rev:0, dis:0 };
+
+function resetProgress() {
+  pStats.qual = pStats.rev = pStats.dis = 0;
+  ['prog-total','prog-qual','prog-rev','prog-dis'].forEach(id => document.getElementById(id).textContent = '0');
+  document.getElementById('log-output').innerHTML = '';
+  document.getElementById('prog-title').textContent = 'Processing leads…';
+  document.getElementById('prog-title').style.color = '';
+  document.getElementById('prog-spinner').style.display = '';
+}
+
+function connectSSE(runId) {
+  const es = new EventSource('/api/progress/' + runId);
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.done) {
+      es.close();
+      document.getElementById('prog-spinner').style.display = 'none';
+      if (d.returncode === 0) {
+        document.getElementById('prog-title').textContent = 'Done — loading results…';
+        loadRun(runId);
+      } else {
+        document.getElementById('prog-title').textContent = 'Pipeline failed';
+        document.getElementById('prog-title').style.color = 'var(--red)';
+      }
+    } else {
+      appendLog(d.line);
+      parseLog(d.line);
+    }
+  };
+  es.onerror = () => es.close();
+}
+
+function appendLog(line) {
+  const isResult = line.includes('✓') || line.includes('✗');
+  const isError  = line.includes('ERROR') || line.includes('FAILED') || line.includes('TIMED OUT');
+  if (!isResult && !isError) return;  // suppress INFO/DEBUG noise
+
+  const el = document.getElementById('log-output');
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  if      (line.includes('✓') && line.includes('| QUALIFIED'))    div.classList.add('log-qual');
+  else if (line.includes('✓') && line.includes('| REVIEW'))       div.classList.add('log-rev');
+  else if (isError)                                                div.classList.add('log-err');
+
+  // Show a clean version: "✓ Company Name | QUALIFIED | score=85"
+  const match = line.match(/[✓✗]\s+lead_id=(\S+)\s+\|\s+(\w+)\s+\|\s+score=\s*(\d+)/);
+  div.textContent = match
+    ? `${line.includes('✓') ? '✓' : '✗'}  ${match[1].padEnd(30)} ${match[2].padEnd(14)} score ${match[3]}`
+    : line;
+
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function parseLog(line) {
+  if (!line.includes('✓')) return;
+  if      (line.includes('| QUALIFIED'))    pStats.qual++;
+  else if (line.includes('| REVIEW'))       pStats.rev++;
+  else if (line.includes('| DISQUALIFIED')) pStats.dis++;
+  else return;
+  const total = pStats.qual + pStats.rev + pStats.dis;
+  document.getElementById('prog-total').textContent = total;
+  document.getElementById('prog-qual').textContent  = pStats.qual;
+  document.getElementById('prog-rev').textContent   = pStats.rev;
+  document.getElementById('prog-dis').textContent   = pStats.dis;
+}
+
+// ── Results ────────────────────────────────────────────────────────────────────
+function setRunIdInUrl(runId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('run_id', runId);
+  const nextUrl = url.pathname === '/'
+    ? `${url.origin}${url.search}${url.hash}`
+    : `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState({}, '', nextUrl);
+}
+
+function clearRunIdFromUrl() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('run_id')) return;
+  url.searchParams.delete('run_id');
+  const nextUrl = url.pathname === '/'
+    ? `${url.origin}${url.search}${url.hash}`
+    : `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState({}, '', nextUrl);
+}
+
+function getRunIdFromUrl() {
+  return new URL(window.location.href).searchParams.get('run_id');
+}
+
+function getRunMeta(runId) {
+  return allRuns.find(r => r.run_id === runId) || null;
+}
+
+function formatRunDateTime(value) {
+  if (!value) return 'Unknown time';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return 'Unknown time';
+  return dt.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+async function loadRun(runId) {
+  currentRunId = runId;
+  setRunIdInUrl(runId);
+  const [leads, previews] = await Promise.all([
+    fetch('/api/results/' + runId).then(r => r.json()),
+    fetch('/api/runs/' + runId + '/email-preview')
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => []),
+  ]);
+  emailPreviews = {};
+  (Array.isArray(previews) ? previews : []).forEach(p => { emailPreviews[p.lead_id] = p; });
+  updateSendButton();
+  populateResults(leads, runId);
+  show('s-results');
+}
+
+function updateSendButton() {
+  const run = allRuns.find(r => r.run_id === currentRunId);
+  const btn = document.getElementById('send-instantly-btn');
+  if (!btn) return;
+  if (run && run.email_status === 'sent') {
+    btn.textContent = 'Emails sent ✓';
+    btn.disabled = true;
+  } else {
+    btn.textContent = 'Send to Instantly';
+    btn.disabled = false;
+  }
+}
+
+function populateResults(leads, runId) {
+  allLeads = leads;
+  currentFilter = 'all';
+  visibleLeadCount = INITIAL_LEADS_PAGE;
+  const counts = { qualified:0, review:0, disqualified:0 };
+  leads.forEach(l => counts[l.decision]++);
+  const total = leads.length;
+
+  document.getElementById('cnt-qual').textContent  = counts.qualified;
+  document.getElementById('cnt-rev').textContent   = counts.review;
+  document.getElementById('cnt-dis').textContent   = counts.disqualified;
+  document.getElementById('sum-qual').textContent  = counts.qualified;
+  document.getElementById('sum-rev').textContent   = counts.review;
+  document.getElementById('sum-dis').textContent   = counts.disqualified;
+  ['cnt-all','sum-total'].forEach(id => document.getElementById(id).textContent = total);
+  const runMeta = getRunMeta(runId);
+  const metaBits = [
+    total + ' leads',
+    runMeta && runMeta.filename ? runMeta.filename : runId.slice(0,8),
+    runMeta ? formatRunDateTime(runMeta.created_at) : new Date().toLocaleDateString('en-US', { month:'long', year:'numeric' }),
+  ];
+  document.getElementById('page-meta').textContent = metaBits.join(' · ');
+
+  const badge = document.getElementById('page-campaign-badge');
+  if (badge) {
+    const cId = runMeta && runMeta.campaign_id ? runMeta.campaign_id : null;
+    if (cId) {
+      badge.textContent = cId.charAt(0).toUpperCase() + cId.slice(1).replace(/_/g, ' ');
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all'));
+  document.querySelector('.results-main').scrollTop = 0;
+  renderLeads('all');
+}
+
+async function loadCampaigns() {
+  try {
+    const campaigns = await fetch('/api/campaigns').then(r => r.json());
+    const sel = document.getElementById('campaign-select');
+    if (campaigns && campaigns.length) {
+      sel.innerHTML = campaigns.map(c =>
+        `<option value="${c.id}">${c.name}</option>`
+      ).join('');
+    }
+  } catch(e) { /* leave static fallback options */ }
+}
+
+async function loadPastRuns() {
+  const runs = await fetch('/api/runs').then(r => r.json());
+  allRuns = runs;
+  renderUploadRuns(runs);
+  renderPastRuns(runs);
+  renderRunsModal(runs);
+}
+
+function renderUploadRuns(runs) {
+  const el = document.getElementById('upload-runs-list');
+  const countEl = document.getElementById('upload-runs-count');
+  countEl.textContent = runs.length ? `${runs.length} total` : 'No saved runs';
+  if (!runs.length) {
+    el.innerHTML = `<div style="font-size:11px;color:var(--text3);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:4px 6px;">No historical runs yet</div>`;
+    return;
+  }
+  el.innerHTML = runs.map(r => {
+    const ts = formatRunDateTime(r.created_at);
+    const fname = (r.filename || 'Unnamed run').length > 28 ? (r.filename || 'Unnamed run').slice(0,25) + '…' : (r.filename || 'Unnamed run');
+    const cLabel = r.campaign_id ? r.campaign_id.charAt(0).toUpperCase() + r.campaign_id.slice(1) : 'Seedance';
+    const badges = [
+      `<span class="campaign-badge">${cLabel}</span>`,
+      r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
+      r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
+      r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
+      r.email_status   ? `<span class="email-status-badge ${r.email_status}">${r.email_status === 'not_sent' ? 'email not sent' : r.email_status === 'sent' ? 'emails sent' : 'partial'}</span>` : '',
+    ].join('');
+    return `
+      <div class="run-item" onclick="loadRun('${r.run_id}')">
+        <div class="run-item-name">
+          <span class="run-status-dot ${r.status}"></span>${fname}
+        </div>
+        <div class="run-item-meta">${ts} · ${r.lead_count} leads</div>
+        ${badges ? `<div class="run-item-badges">${badges}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function renderPastRuns(runs) {
+  const seeAllBtn = document.getElementById('see-all-runs-btn');
+  seeAllBtn.classList.toggle('hidden', runs.length <= 3);
+  const el = document.getElementById('past-runs-list');
+  if (!runs.length) {
+    el.innerHTML = `<div style="font-size:11px;color:var(--text3);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:4px 6px;">No runs yet</div>`;
+    return;
+  }
+  el.innerHTML = runs.slice(0, 3).map(r => {
+    const isCurrent = r.run_id === currentRunId;
+    const date = formatRunDateTime(r.created_at);
+    const baseName = r.filename || 'Unnamed run';
+    const fname = baseName.length > 22 ? baseName.slice(0,19) + '…' : baseName;
+    const cLabel = r.campaign_id ? r.campaign_id.charAt(0).toUpperCase() + r.campaign_id.slice(1) : 'Seedance';
+    const badges = [
+      `<span class="campaign-badge">${cLabel}</span>`,
+      r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
+      r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
+      r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
+      r.email_status   ? `<span class="email-status-badge ${r.email_status}">${r.email_status === 'not_sent' ? 'email not sent' : r.email_status === 'sent' ? 'emails sent' : 'partial'}</span>` : '',
+    ].join('');
+    return `
+      <div class="run-item${isCurrent ? ' current' : ''}" onclick="loadRun('${r.run_id}')">
+        <div class="run-item-name">
+          <span class="run-status-dot ${r.status}"></span>${fname}
+        </div>
+        <div class="run-item-meta">${date} · ${r.lead_count} leads</div>
+        ${badges ? `<div class="run-item-badges">${badges}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function renderRunsModal(runs) {
+  const countEl = document.getElementById('runs-modal-count');
+  const el = document.getElementById('runs-modal-list');
+  countEl.textContent = runs.length ? `${runs.length} runs` : 'No runs';
+  if (!runs.length) {
+    el.innerHTML = `<div class="runs-modal-empty">No runs yet</div>`;
+    return;
+  }
+  el.innerHTML = runs.map(r => {
+    const isCurrent = r.run_id === currentRunId;
+    const date = formatRunDateTime(r.created_at);
+    const baseName = r.filename || 'Unnamed run';
+    const fname = baseName.length > 34 ? baseName.slice(0,31) + '…' : baseName;
+    const badges = [
+      r.n_qualified    ? `<span class="run-micro-badge qualified">${r.n_qualified}Q</span>` : '',
+      r.n_review       ? `<span class="run-micro-badge review">${r.n_review}R</span>` : '',
+      r.n_disqualified ? `<span class="run-micro-badge disqualified">${r.n_disqualified}D</span>` : '',
+    ].join('');
+    return `
+      <div class="run-item${isCurrent ? ' current' : ''}" onclick="selectRunFromModal('${r.run_id}')">
+        <div class="run-item-name">
+          <span class="run-status-dot ${r.status}"></span>${fname}
+        </div>
+        <div class="run-item-meta">${date} · ${r.lead_count} leads</div>
+        ${badges ? `<div class="run-item-badges">${badges}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function openRunsModal() {
+  document.getElementById('runs-modal').classList.remove('hidden');
+}
+
+function closeRunsModal() {
+  document.getElementById('runs-modal').classList.add('hidden');
+}
+
+function selectRunFromModal(runId) {
+  closeRunsModal();
+  window.setTimeout(() => { loadRun(runId); }, 0);
+}
+
+// ── Filter ─────────────────────────────────────────────────────────────────────
+function filterLeads(filter, btn) {
+  currentFilter = filter;
+  visibleLeadCount = INITIAL_LEADS_PAGE;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === filter));
+  document.querySelector('.results-main').scrollTop = 0;
+  renderLeads(filter);
+}
+
+// ── Render leads ───────────────────────────────────────────────────────────────
+function initials(name) { return name.split(' ').filter(Boolean).slice(0,2).map(n=>n[0]).join('').toUpperCase(); }
+function scoreClass(d) { return d==='qualified'?'green':d==='review'?'amber':'red'; }
+function formatSignalType(value) { return (value || '').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown source'; }
+function normalizeWebsiteUrl(value) {
+  if (!value) return '';
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
+function getFilteredLeads(filter = currentFilter) {
+  return filter === 'all' ? allLeads : allLeads.filter(l => l.decision === filter);
+}
+
+function updateLoadState(total, shown) {
+  const el = document.getElementById('results-load-state');
+  if (!total) {
+    el.textContent = 'No leads to display';
+    return;
+  }
+  if (shown < total) {
+    el.textContent = `Showing ${shown} of ${total} leads · scroll for more`;
+    return;
+  }
+  el.textContent = `Showing all ${total} leads`;
+}
+
+function maybeLoadMoreLeads() {
+  const filtered = getFilteredLeads();
+  if (visibleLeadCount >= filtered.length) return;
+  const triggerIndex = Math.max(0, Math.min(visibleLeadCount - LEADS_PREFETCH_OFFSET, filtered.length - 1));
+  const triggerRow = document.querySelector(`#leads .lead-row[data-render-index="${triggerIndex}"]`);
+  const container = document.querySelector('.results-main');
+  if (!triggerRow || !container) return;
+  const triggerRect = triggerRow.getBoundingClientRect();
+  const containerRect = container.getBoundingClientRect();
+  if (triggerRect.top <= containerRect.bottom) {
+    visibleLeadCount = Math.min(visibleLeadCount + LEADS_PAGE_SIZE, filtered.length);
+    renderLeads(currentFilter);
+  }
+}
+
+function renderLeads(filter) {
+  currentFilter = filter;
+  const filtered = getFilteredLeads(filter);
+  visibleLeadCount = Math.max(Math.min(visibleLeadCount || INITIAL_LEADS_PAGE, filtered.length), Math.min(INITIAL_LEADS_PAGE, filtered.length));
+  const visible = filtered.slice(0, visibleLeadCount);
+  const el = document.getElementById('leads');
+  el.classList.add('rerendering');
+  requestAnimationFrame(() => {
+    el.innerHTML = visible.map((l,i) => renderRow(l,i)).join('');
+    el.classList.remove('rerendering');
+    updateLoadState(filtered.length, visible.length);
+    maybeLoadMoreLeads();
+  });
+}
+
+function renderRow(l, i) {
+  const [abg, afg] = PALETTES[i % PALETTES.length];
+  const sc = scoreClass(l.decision);
+  const companyMeta = [l.company, l.role].filter(Boolean).join(' · ');
+  const companySizeMeta = l.company_size ? `${l.company_size} employees` : '';
+  const industryMeta    = l.industry ? l.industry.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()) : '';
+  const miniBars = ['segment','workflow','pain','buyer','commercial'].map(k => {
+    const h = Math.max(3, Math.round(l[k]/MAX[k]*20));
+    return `<div class="mini-bar" style="height:${h}px;background:${CLR[k]};opacity:0.75;"></div>`;
+  }).join('');
+  const bars = ['segment','buyer','pain','workflow','commercial'].map(k =>
+    `<div class="bar-row">
+      <span class="bar-label">${LBL[k]}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.round(l[k]/MAX[k]*100)}%;background:${CLR[k]};"></div></div>
+      <span class="bar-score">${l[k]}/${MAX[k]}</span>
+    </div>`).join('');
+  const qHtml = (l.reasons||[]).map(r=>`<div class="reason-item pos">${r}</div>`).join('');
+  const dHtml = (l.disreasons||[]).map(r=>`<div class="reason-item neg">${r}</div>`).join('');
+  const sigBadge = l.signal_strength ? `<span class="signal-badge">signal: ${l.signal_strength}</span>` : '';
+  const linkedinLink = l.linkedin_url ? `<a class="detail-link" href="${l.linkedin_url}" target="_blank" rel="noopener noreferrer">Open LinkedIn profile ↗</a>` : '';
+  const companyWebsiteLink = l.company_website ? `<a class="detail-link" href="${normalizeWebsiteUrl(l.company_website)}" target="_blank" rel="noopener noreferrer">Open company website ↗</a>` : '';
+  const sourceText = `<div class="detail-source">Generated from: ${formatSignalType(l.signal_type)}</div>`;
+  const sourceLink = l.source_url ? `<a class="detail-link" href="${l.source_url}" target="_blank" rel="noopener noreferrer">Open source reference ↗</a>` : '';
+  const referenceLinks = [linkedinLink, companyWebsiteLink, sourceText, sourceLink].filter(Boolean).join('');
+  const detailMeta = [industryMeta, companySizeMeta].filter(Boolean).map(v => `<span class="meta-pill">${v}</span>`).join('');
+  const evHtml = [
+    ...(l.observed||[]).map(e=>`<div class="ev-item">${e}</div>`),
+    ...(l.inferred||[]).map(e=>`<div class="ev-item inferred">${e}</div>`),
+    ...(l.unknowns||[]).map(e=>`<div class="ev-item unknown">${e}</div>`),
+    ...(l.hard_disqualifiers||[]).map(e=>`<div class="ev-item hard-dis">${e}</div>`),
+  ].join('');
+  const preview = emailPreviews[l.lead_id];
+  const emailHtml = preview ? (() => {
+    const manualTag = preview.is_manual
+      ? `<span class="manual-badge">★ High value — send manually</span>`
+      : preview.email_sent
+        ? `<span class="email-sent-badge">✓ Sent to Instantly</span>`
+        : '';
+    const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
+    return `<div class="email-preview">
+      <div class="email-preview-title">Email Preview</div>
+      ${manualTag}
+      <div class="email-subject">
+        <span>Subject: <span>${preview.subject}</span></span>
+        <button class="copy-btn" onclick="copyEmailField(${lid},'subject',this)">⧉ Copy subject</button>
+      </div>
+      <div class="email-body-wrap">
+        <div class="email-body-header">
+          <span class="email-body-label">Body</span>
+          <button class="copy-btn" onclick="copyEmailField(${lid},'body',this)">⧉ Copy body</button>
+        </div>
+        <div class="email-body">${preview.body}</div>
+      </div>
+    </div>`;
+  })() : '';
+
+  const customerBadge = l.excluded ? '<span class="customer-badge">existing customer</span>' : '';
+  return `
+    <div class="lead-row${l.excluded ? ' excluded' : ''}" id="lr-${i}" data-render-index="${i}">
+      <div class="lead-summary" onclick="toggle(${i})">
+        <div class="avatar" style="background:${abg};color:${afg}">${initials(l.name)}</div>
+        <div>
+          <div class="lead-name">${l.name}${customerBadge}</div>
+          <div class="lead-company">${companyMeta}</div>
+          ${(industryMeta || companySizeMeta) ? `<div class="lead-company-extra">${[industryMeta, companySizeMeta].filter(Boolean).join(' · ')}</div>` : ''}
+        </div>
+        <div class="mini-bars">${miniBars}</div>
+        <span class="decision-badge ${l.decision}">${l.decision}</span>
+        <div class="score-cell">
+          <span class="score-num ${sc}">${l.score}</span>
+          ${l.manual_email_status === 'sent'     ? '<span class="manual-email-badge sent">✉ sent</span>'     : ''}
+          ${l.manual_email_status === 'not_sent' ? '<span class="manual-email-badge not_sent">✉ not sent</span>' : ''}
+        </div>
+        <span class="chevron">▶</span>
+      </div>
+      <div class="lead-detail">
+        <div class="detail-grid">
+          <div>
+            <div class="detail-section-title">Score breakdown <span class="conf-badge">${l.conf} confidence</span></div>
+            ${detailMeta ? `<div class="detail-meta">${detailMeta}</div>` : ''}
+            <div class="score-bars">${bars}</div>
+            ${l.reasoning ? `<div class="use-case-box" style="margin-top:12px;"><div class="use-case-label">Reasoning</div>${l.reasoning}</div>` : ''}
+            ${referenceLinks ? `<div class="detail-links">${referenceLinks}</div>` : ''}
+            ${l.usecase ? `<div class="use-case-box"><div class="use-case-label">Suggested use case</div>${l.usecase}</div>` : ''}
+          </div>
+          <div>
+            <div class="detail-section-title">${l.decision==='disqualified'?'Disqualification reasons':'Qualification signals'}</div>
+            <div class="reason-list">${qHtml}${dHtml}</div>
+            <div class="ev-section">${sigBadge}${evHtml}</div>
+          </div>
+        </div>
+        ${emailHtml}
+      </div>
+    </div>`;
+}
+
+function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
+
+let _emailConfirmLeadId = null;
+
+function copyEmailField(leadId, field, btn) {
+  const preview = emailPreviews[leadId];
+  const text = (preview && preview[field]) || '';
+  const label = field === 'subject' ? '⧉ Copy subject' : '⧉ Copy body';
+  const doFlash = () => {
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 1800);
+    if (field === 'body') openEmailConfirmModal(leadId);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(doFlash).catch(() => fallbackCopy(text, doFlash));
+  } else {
+    fallbackCopy(text, doFlash);
+  }
+}
+
+function openEmailConfirmModal(leadId) {
+  _emailConfirmLeadId = leadId;
+  const lead = allLeads.find(l => l.lead_id === leadId);
+  document.getElementById('email-confirm-name').textContent    = lead ? lead.name    : leadId;
+  document.getElementById('email-confirm-company').textContent = lead ? lead.company : '';
+  document.getElementById('email-confirm-modal').classList.remove('hidden');
+}
+
+async function confirmEmailStatus(status) {
+  const leadId = _emailConfirmLeadId;
+  document.getElementById('email-confirm-modal').classList.add('hidden');
+  _emailConfirmLeadId = null;
+  if (!leadId || !currentRunId) return;
+  await fetch(`/api/runs/${currentRunId}/leads/${encodeURIComponent(leadId)}/email-status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  const lead = allLeads.find(l => l.lead_id === leadId);
+  if (lead) { lead.manual_email_status = status; renderLeads(currentFilter); }
+}
+
+function fallbackCopy(text, cb) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+  cb();
+}
+
+document.querySelector('.results-main').addEventListener('scroll', () => {
+  if (!document.getElementById('s-results').classList.contains('active')) return;
+  maybeLoadMoreLeads();
+});
+
+// ── Delete run ─────────────────────────────────────────────────────────────────
+function confirmDelete() { document.getElementById('delete-modal').classList.remove('hidden'); }
+function closeModal()    { document.getElementById('delete-modal').classList.add('hidden'); }
+
+async function deleteCurrentRun() {
+  closeModal();
+  if (!currentRunId) return;
+  await fetch('/api/runs/' + currentRunId, { method:'DELETE' });
+  currentRunId = null;
+  allLeads = [];
+  show('s-upload');
+  // Reset file input so user can re-upload same file
+  document.getElementById('file-input').value = '';
+  selectedFile = null;
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('drop-hint').style.display = '';
+  document.getElementById('file-info').classList.remove('show');
+  clearRunIdFromUrl();
+}
+
+// ── Send to Instantly ──────────────────────────────────────────────────────────
+async function openSendModal() {
+  if (!currentRunId) return;
+  document.getElementById('send-modal-body').textContent = 'Loading eligible leads...';
+  document.getElementById('send-modal-confirm').disabled = true;
+  document.getElementById('send-modal').classList.remove('hidden');
+
+  const previews = Object.values(emailPreviews);
+  const eligible  = previews.filter(p => !p.is_manual && !p.email_sent);
+  const manual    = previews.filter(p => p.is_manual);
+
+  if (!eligible.length) {
+    document.getElementById('send-modal-body').textContent =
+      manual.length
+        ? `All ${manual.length} eligible leads are high-value (score > threshold) — send these manually.`
+        : 'No eligible leads to send.';
+    return;
+  }
+
+  document.getElementById('send-modal-body').innerHTML =
+    `<strong>${eligible.length} lead${eligible.length > 1 ? 's' : ''}</strong> will be added to your Instantly campaign.` +
+    (manual.length ? `<br><br><span style="color:var(--blue)">★ ${manual.length} high-value lead${manual.length > 1 ? 's' : ''} (score &gt; threshold) excluded — send these manually.</span>` : '');
+  document.getElementById('send-modal-confirm').disabled = false;
+}
+
+function closeSendModal() {
+  document.getElementById('send-modal').classList.add('hidden');
+}
+
+async function confirmSendEmails() {
+  document.getElementById('send-modal-confirm').disabled = true;
+  document.getElementById('send-modal-body').textContent = 'Sending...';
+  try {
+    const res = await fetch('/api/runs/' + currentRunId + '/send-emails', { method: 'POST' }).then(r => r.json());
+    if (res.error) {
+      document.getElementById('send-modal-body').textContent = 'Error: ' + res.error;
+      return;
+    }
+    document.getElementById('send-modal-body').textContent = `✓ ${res.sent} lead${res.sent > 1 ? 's' : ''} sent to Instantly.`;
+    await loadPastRuns();
+    await loadRun(currentRunId);
+  } catch(e) {
+    document.getElementById('send-modal-body').textContent = 'Request failed. Check your Instantly config.';
+  }
+  setTimeout(closeSendModal, 2000);
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────────
+
+function switchSettingsTab(tab) {
+  ['pipeline','exclusions','templates'].forEach(t => {
+    document.getElementById('stab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('stab-panel-' + t).classList.toggle('active', t === tab);
+  });
+}
+
+async function openSettings() {
+  const [s, excl, tmpls] = await Promise.all([
+    fetch('/api/settings').then(r => r.json()).catch(() => appSettings),
+    fetch('/api/exclusions').then(r => r.json()).catch(() => []),
+    fetch('/api/email-templates').then(r => r.json()).catch(() => []),
+  ]);
+  appSettings = s;
+  exclusions  = excl;
+  emailTemplates = tmpls;
+  document.getElementById('input-qual-threshold').value = s.qualified_threshold;
+  document.getElementById('input-dis-threshold').value  = s.disqualified_threshold;
+  const apolloOn = !!s.apollo_enabled;
+  document.getElementById('apollo-toggle').checked = apolloOn;
+  const statusEl = document.getElementById('apollo-status');
+  statusEl.textContent = apolloOn ? 'Enabled' : 'Disabled';
+  statusEl.className   = 'apollo-status ' + (apolloOn ? 'on' : 'off');
+  renderExclusions();
+  renderTemplates();
+  switchSettingsTab('pipeline');
+  show('s-settings');
+}
+
+async function saveApollo() {
+  const enabled = document.getElementById('apollo-toggle').checked;
+  const qt = parseInt(document.getElementById('input-qual-threshold').value, 10) || appSettings.qualified_threshold;
+  const dt = parseInt(document.getElementById('input-dis-threshold').value, 10)  || appSettings.disqualified_threshold;
+  await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ qualified_threshold: qt, disqualified_threshold: dt, apollo_enabled: enabled }),
+  });
+  appSettings.apollo_enabled = enabled;
+  const statusEl = document.getElementById('apollo-status');
+  statusEl.textContent = enabled ? 'Enabled' : 'Disabled';
+  statusEl.className   = 'apollo-status ' + (enabled ? 'on' : 'off');
+}
+
+function exportRun() {
+  if (!currentRunId) return;
+  const a = document.createElement('a');
+  a.href = '/api/runs/' + currentRunId + '/export';
+  a.download = 'leads-' + currentRunId.slice(0, 8) + '.csv';
+  a.click();
+}
+
+function backToResults() {
+  if (currentRunId) { show('s-results'); } else { show('s-upload'); }
+}
+
+async function saveThresholds() {
+  const qt  = parseInt(document.getElementById('input-qual-threshold').value, 10);
+  const dt  = parseInt(document.getElementById('input-dis-threshold').value, 10);
+  if (isNaN(qt) || isNaN(dt) || dt >= qt) {
+    alert('Review threshold must be a number less than the qualified threshold.');
+    return;
+  }
+  const resp = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ qualified_threshold: qt, disqualified_threshold: dt, apollo_enabled: !!appSettings.apollo_enabled }),
+  });
+  if (!resp.ok) { alert((await resp.json()).error); return; }
+  appSettings = { ...appSettings, qualified_threshold: qt, disqualified_threshold: dt };
+  const btn = document.getElementById('save-thresholds-btn');
+  btn.textContent = 'Saved ✓';
+  btn.classList.add('saved');
+  setTimeout(() => { btn.textContent = 'Save thresholds'; btn.classList.remove('saved'); }, 2000);
+  if (currentRunId) reclassifyAndRender();
+}
+
+function reclassifyAndRender() {
+  const qt = appSettings.qualified_threshold;
+  const dt = appSettings.disqualified_threshold;
+  allLeads = allLeads.map(l => {
+    const d = { ...l };
+    if (d.hard_disqualifiers && d.hard_disqualifiers.length) {
+      d.decision = 'disqualified';
+    } else if (d.score >= qt) {
+      d.decision = 'qualified';
+    } else if (d.score < dt) {
+      d.decision = 'disqualified';
+    } else {
+      d.decision = 'review';
+    }
+    return d;
+  });
+  populateResults(allLeads, currentRunId);
+}
+
+function renderExclusions() {
+  const el = document.getElementById('exclusion-list');
+  if (!exclusions.length) {
+    el.innerHTML = '<div class="exclusion-empty">No exclusions yet.</div>';
+    return;
+  }
+  el.innerHTML = exclusions.map(e =>
+    `<div class="exclusion-item">
+       <span>${e.value}</span>
+       <button class="exclusion-del" onclick="removeExclusion(${e.id})" title="Remove">×</button>
+     </div>`
+  ).join('');
+}
+
+async function importExclusionCsv(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const btn = document.getElementById('import-csv-btn');
+  btn.textContent = 'Importing…';
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/exclusions/import', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (resp.ok) {
+      exclusions = await fetch('/api/exclusions').then(r => r.json());
+      renderExclusions();
+      btn.textContent = `✓ Imported ${data.imported}`;
+      btn.classList.add('saved');
+      setTimeout(() => { btn.textContent = 'Import CSV'; btn.classList.remove('saved'); }, 3000);
+    }
+  } finally {
+    btn.disabled = false;
+    input.value = '';
+  }
+}
+
+async function addExclusion() {
+  const input = document.getElementById('exclusion-input');
+  const value = input.value.trim();
+  if (!value) return;
+  await fetch('/api/exclusions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  input.value = '';
+  exclusions = await fetch('/api/exclusions').then(r => r.json());
+  renderExclusions();
+}
+
+async function removeExclusion(id) {
+  await fetch('/api/exclusions/' + id, { method: 'DELETE' });
+  exclusions = exclusions.filter(e => e.id !== id);
+  renderExclusions();
+}
+
+// ── Email Templates ────────────────────────────────────────────────────────────
+
+const VERTICAL_LABELS = {
+  ai_tools: 'AI Tools', film_production: 'Film Production',
+  vfx_production: 'VFX Production', animation: 'Animation',
+  short_drama: 'Short Drama', ecommerce: 'Ecommerce', ai_generic: 'AI Generic',
+};
+
+const VERTICAL_OPTIONS = ['ai_tools','film_production','vfx_production','animation','short_drama','ecommerce','ai_generic'];
+
+function renderTemplates() {
+  const list = document.getElementById('tmpl-list');
+  if (!list) return;
+  if (!emailTemplates.length) {
+    list.innerHTML = '<div class="tmpl-empty">No templates yet.</div>';
+    return;
+  }
+  list.innerHTML = emailTemplates.map(t => {
+    const vOpts = VERTICAL_OPTIONS.map(v =>
+      `<option value="${v}"${v===t.vertical?' selected':''}>${VERTICAL_LABELS[v]||v}</option>`
+    ).join('');
+    return `
+    <div class="tmpl-card" id="tmpl-card-${t.id}">
+      <div class="tmpl-card-top">
+        <span class="tmpl-vertical-badge">${VERTICAL_LABELS[t.vertical] || t.vertical}</span>
+        <div class="tmpl-info">
+          <div class="tmpl-name">${t.name}</div>
+          <div class="tmpl-subject">${t.subject}</div>
+        </div>
+        <div class="tmpl-actions">
+          <button class="tmpl-btn" onclick="copyTmpl(${t.id}, this)" title="Copy subject + body">Copy</button>
+          <button class="tmpl-btn" onclick="toggleEditTmpl(${t.id})" title="Edit template">Edit</button>
+          <button class="tmpl-btn del" onclick="deleteTmpl(${t.id})" title="Delete template">Del</button>
+        </div>
+      </div>
+      <div class="tmpl-edit-form" id="tmpl-edit-${t.id}">
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Vertical</label>
+          <select class="tmpl-form-input" id="tmpl-edit-vertical-${t.id}">${vOpts}</select>
+        </div>
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Template name</label>
+          <input type="text" class="tmpl-form-input" id="tmpl-edit-name-${t.id}" value="${t.name.replace(/"/g,'&quot;')}">
+        </div>
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Subject</label>
+          <input type="text" class="tmpl-form-input" id="tmpl-edit-subject-${t.id}" value="${t.subject.replace(/"/g,'&quot;')}">
+        </div>
+        <div class="tmpl-form-row">
+          <label class="tmpl-form-label">Body</label>
+          <textarea class="tmpl-form-textarea" id="tmpl-edit-body-${t.id}">${t.body.replace(/</g,'&lt;')}</textarea>
+        </div>
+        <div class="tmpl-form-actions">
+          <button class="settings-save-btn" onclick="updateTmpl(${t.id})">Save changes</button>
+          <button class="settings-save-btn" onclick="toggleEditTmpl(${t.id})" style="color:var(--text3)">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleEditTmpl(id) {
+  const form = document.getElementById('tmpl-edit-' + id);
+  form.classList.toggle('open');
+}
+
+async function updateTmpl(id) {
+  const vertical = document.getElementById('tmpl-edit-vertical-' + id).value;
+  const name     = document.getElementById('tmpl-edit-name-' + id).value.trim();
+  const subject  = document.getElementById('tmpl-edit-subject-' + id).value.trim();
+  const body     = document.getElementById('tmpl-edit-body-' + id).value.trim();
+  if (!name || !subject || !body) { alert('Name, subject, and body are required.'); return; }
+  const resp = await fetch('/api/email-templates/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vertical, name, subject, body }),
+  });
+  if (!resp.ok) { alert('Failed to update template.'); return; }
+  const updated = await resp.json();
+  const idx = emailTemplates.findIndex(t => t.id === id);
+  if (idx !== -1) emailTemplates[idx] = updated;
+  renderTemplates();
+}
+
+function copyTmpl(id, btn) {
+  const t = emailTemplates.find(t => t.id === id);
+  if (!t) return;
+  const text = 'Subject: ' + t.subject + '\\n\\n' + t.body;
+  const prev = btn.textContent;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => { btn.textContent = '✓'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500); });
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✓'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500);
+  }
+}
+
+function toggleTmplForm() {
+  const form = document.getElementById('tmpl-add-form');
+  const btn  = document.getElementById('tmpl-add-btn');
+  const open = form.classList.toggle('open');
+  btn.textContent = open ? '− Cancel' : '+ Add template';
+  if (open) {
+    document.getElementById('tmpl-name').value    = '';
+    document.getElementById('tmpl-subject').value = '';
+    document.getElementById('tmpl-body').value    = '';
+  }
+}
+
+async function saveTmpl() {
+  const vertical = document.getElementById('tmpl-vertical').value;
+  const name     = document.getElementById('tmpl-name').value.trim();
+  const subject  = document.getElementById('tmpl-subject').value.trim();
+  const body     = document.getElementById('tmpl-body').value.trim();
+  if (!name || !subject || !body) { alert('Name, subject, and body are required.'); return; }
+  const resp = await fetch('/api/email-templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vertical, name, subject, body }),
+  });
+  if (!resp.ok) { alert('Failed to save template.'); return; }
+  const t = await resp.json();
+  emailTemplates.push(t);
+  renderTemplates();
+  toggleTmplForm();
+}
+
+async function deleteTmpl(id) {
+  if (!confirm('Delete this template?')) return;
+  await fetch('/api/email-templates/' + id, { method: 'DELETE' });
+  emailTemplates = emailTemplates.filter(t => t.id !== id);
+  renderTemplates();
+}
+
+const SHELL_SCREENS = new Set(['s-home', 's-campaign', 's-results', 's-settings']);
+
+function getDefaultCampaignId() {
+  return campaigns.find(c => c.id === 'seedance')?.id || (campaigns[0] && campaigns[0].id) || 'seedance';
+}
+
+function formatCampaignName(campaignId, fallbackName = '') {
+  if (fallbackName) return fallbackName;
+  if (!campaignId) return 'Campaign';
+  return campaignId
+    .split('_')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatCampaignDescription(campaign) {
+  if (!campaign) return 'Campaign workspace';
+  if (campaign.id === 'seedance') return 'ByteDance AI video generation platform';
+  return campaign.description || 'Campaign workspace';
+}
+
+function getRunMeta(runId) {
+  return allRuns.find(r => r.run_id === runId) || null;
+}
+
+function getRunsForCampaign(campaignId) {
+  if (!campaignId) return allRuns;
+  if (campaignRunsById[campaignId]) return campaignRunsById[campaignId];
+  return allRuns.filter(r => (r.campaign_id || 'seedance') === campaignId);
+}
+
+function getActiveCampaign() {
+  const activeId = currentCampaignId || getDefaultCampaignId();
+  return campaigns.find(c => c.id === activeId) || { id: activeId, name: formatCampaignName(activeId) };
+}
+
+function getActiveCampaignId() {
+  return getActiveCampaign().id || getDefaultCampaignId();
+}
+
+function getCampaignApiBase(campaignId = getActiveCampaignId()) {
+  return `/api/campaigns/${encodeURIComponent(campaignId)}`;
+}
+
+function getResultsContextRuns() {
+  if (currentRunId) {
+    const runMeta = getRunMeta(currentRunId);
+    const campaignId = runMeta && runMeta.campaign_id ? runMeta.campaign_id : currentCampaignId;
+    return getRunsForCampaign(campaignId).slice(0, 6);
+  }
+  return getRunsForCampaign(currentCampaignId).slice(0, 6);
+}
+
+function buildRunBadges(run, options = {}) {
+  const { includeCampaign = true, includeEmail = true } = options;
+  const campaignLabel = formatCampaignName(run.campaign_id || 'seedance');
+  return [
+    includeCampaign ? `<span class="campaign-badge">${campaignLabel}</span>` : '',
+    run.n_qualified    ? `<span class="run-micro-badge qualified">${run.n_qualified}Q</span>` : '',
+    run.n_review       ? `<span class="run-micro-badge review">${run.n_review}R</span>` : '',
+    run.n_disqualified ? `<span class="run-micro-badge disqualified">${run.n_disqualified}D</span>` : '',
+    includeEmail && run.email_status ? `<span class="email-status-badge ${run.email_status}">${run.email_status === 'not_sent' ? 'email not sent' : run.email_status === 'sent' ? 'emails sent' : 'partial'}</span>` : '',
+  ].join('');
+}
+
+function renderRunItem(run, options = {}) {
+  const {
+    current = false,
+    onClick = `loadRun('${run.run_id}')`,
+    maxName = 28,
+    includeCampaign = true,
+    includeEmail = true,
+  } = options;
+  const date = formatRunDateTime(run.created_at);
+  const baseName = run.filename || 'Unnamed run';
+  const name = baseName.length > maxName ? `${baseName.slice(0, maxName - 1)}…` : baseName;
+  const badges = buildRunBadges(run, { includeCampaign, includeEmail });
+  return `
+    <div class="run-item${current ? ' current' : ''}" onclick="${onClick}">
+      <div class="run-item-name">
+        <span class="run-status-dot ${run.status}"></span>${name}
+      </div>
+      <div class="run-item-meta">${date} · ${run.lead_count} leads</div>
+      ${badges ? `<div class="run-item-badges">${badges}</div>` : ''}
+    </div>`;
+}
+
+function updateSidebarState(activeScreenId) {
+  const shell = document.getElementById('app-shell');
+  if (shell) shell.classList.toggle('active', SHELL_SCREENS.has(activeScreenId));
+
+  const navMap = {
+    'nav-home': activeScreenId === 's-home',
+    'nav-results': activeScreenId === 's-results',
+    'nav-settings': activeScreenId === 's-settings',
+  };
+  Object.entries(navMap).forEach(([id, isActive]) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', isActive);
+  });
+
+  document.querySelectorAll('[data-campaign-nav]').forEach(el => {
+    el.classList.toggle('active', activeScreenId === 's-campaign' && el.dataset.campaignNav === (currentCampaignId || ''));
+  });
+
+}
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
+  const target = document.getElementById(id);
+  if (target) target.classList.add('active');
+  updateSidebarState(id);
+}
+
+function updateUploadModalContext(campaignId = null) {
+  const activeId = campaignId || document.getElementById('campaign-select')?.value || getDefaultCampaignId();
+  const activeCampaign = campaigns.find(c => c.id === activeId) || { id: activeId, name: formatCampaignName(activeId) };
+  const sub = document.getElementById('upload-modal-sub');
+  if (sub) sub.textContent = `Trigify export for ${formatCampaignName(activeCampaign.id, activeCampaign.name)}`;
+}
+
+function resetUploadForm() {
+  const fileInputEl = document.getElementById('file-input');
+  if (fileInputEl) fileInputEl.value = '';
+  selectedFile = null;
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('drop-hint').style.display = '';
+  document.getElementById('file-info').classList.remove('show');
+  document.getElementById('file-name-text').textContent = '—';
+  document.getElementById('file-size-text').textContent = '—';
+}
+
+function closeUploadModal(reset = false) {
+  document.getElementById('upload-modal').classList.add('hidden');
+  if (reset) resetUploadForm();
+}
+
+function openUploadModal(campaignId = currentCampaignId) {
+  const select = document.getElementById('campaign-select');
+  const targetCampaign = campaignId || getDefaultCampaignId();
+  if (targetCampaign) currentCampaignId = targetCampaign;
+  if (select && targetCampaign) select.value = targetCampaign;
+  updateUploadModalContext(targetCampaign);
+  loadPastRuns();
+  document.getElementById('upload-modal').classList.remove('hidden');
+}
+
+function goToUpload(campaignId = currentCampaignId) {
+  openUploadModal(campaignId);
+}
+
+function openHome(campaignId = null) {
+  currentCampaignId = null;
+  renderHome();
+  show('s-home');
+}
+
+function openCampaignView(campaignId) {
+  currentCampaignId = campaignId;
+  renderCampaignView();
+  show('s-campaign');
+}
+
+function openLatestResults() {
+  const scopedRuns = getRunsForCampaign(currentCampaignId);
+  const targetRun = scopedRuns[0] || allRuns[0];
+  if (!targetRun) {
+    alert('No runs found yet. Upload a CSV to get started.');
+    return;
+  }
+  loadRun(targetRun.run_id);
+}
+
+function renderSidebarCampaigns() {
+  const el = document.getElementById('sidebar-campaigns');
+  if (!el) return;
+  if (!campaigns.length) {
+    el.innerHTML = '<div class="empty-state">No campaigns available.</div>';
+    return;
+  }
+  el.innerHTML = campaigns.map(c => {
+    const label = formatCampaignName(c.id, c.name);
+    const runs = getRunsForCampaign(c.id);
+    return `<button class="nav-btn" data-campaign-nav="${c.id}" onclick="openCampaignView('${c.id}')"><span>${label}</span><span class="nav-btn-tag">${runs.length} runs</span></button>`;
+  }).join('');
+}
+
+function renderHome() {
+  const scopedRuns = allRuns;
+  const leads = scopedRuns.reduce((sum, run) => sum + (run.lead_count || 0), 0);
+  const qualified = scopedRuns.reduce((sum, run) => sum + (run.n_qualified || 0), 0);
+  const review = scopedRuns.reduce((sum, run) => sum + (run.n_review || 0), 0);
+  const disqualified = scopedRuns.reduce((sum, run) => sum + (run.n_disqualified || 0), 0);
+
+  document.getElementById('home-kicker').textContent = 'Home';
+  document.getElementById('home-title').textContent = 'Campaigns overview';
+  document.getElementById('home-meta').textContent = 'Choose a campaign to open its dedicated runs view.';
+
+  document.getElementById('home-sum-runs').textContent = scopedRuns.length;
+  document.getElementById('home-sum-leads').textContent = leads;
+  document.getElementById('home-sum-qual').textContent = qualified;
+  document.getElementById('home-sum-other').textContent = review + disqualified;
+
+  const cardsEl = document.getElementById('home-campaigns-grid');
+  cardsEl.innerHTML = campaigns.map(c => {
+    const label = formatCampaignName(c.id, c.name);
+    const runs = getRunsForCampaign(c.id);
+    const totalLeads = runs.reduce((sum, run) => sum + (run.lead_count || 0), 0);
+    const totalQualified = runs.reduce((sum, run) => sum + (run.n_qualified || 0), 0);
+    const lastRun = runs[0];
+    return `
+      <div class="campaign-card" onclick="openCampaignView('${c.id}')">
+        <div class="campaign-card-head">
+          <div>
+            <div class="campaign-card-title">${label}</div>
+            <div class="campaign-card-desc">${formatCampaignDescription(c)}</div>
+          </div>
+          <span class="campaign-badge">${runs.length ? `${runs.length} runs` : 'No runs'}</span>
+        </div>
+        <div class="campaign-card-stats">
+          <div class="campaign-stat">
+            <div class="campaign-stat-label">Leads</div>
+            <div class="campaign-stat-value">${totalLeads}</div>
+          </div>
+          <div class="campaign-stat">
+            <div class="campaign-stat-label">Qualified</div>
+            <div class="campaign-stat-value" style="color:var(--green);">${totalQualified}</div>
+          </div>
+        </div>
+        <div class="panel-sub">${lastRun ? `Latest run ${formatRunDateTime(lastRun.created_at)}` : 'Upload a CSV to start this campaign.'}</div>
+      </div>`;
+  }).join('') || '<div class="empty-state">No campaigns available.</div>';
+
+  updateSidebarState(document.getElementById('s-home').classList.contains('active') ? 's-home' : (document.querySelector('.screen.active') || {}).id || 's-home');
+}
+
+function renderCampaignView() {
+  if (!currentCampaignId) {
+    openHome();
+    return;
+  }
+  const activeCampaign = getActiveCampaign();
+  const scopedRuns = getRunsForCampaign(currentCampaignId);
+  const leads = scopedRuns.reduce((sum, run) => sum + (run.lead_count || 0), 0);
+  const qualified = scopedRuns.reduce((sum, run) => sum + (run.n_qualified || 0), 0);
+  const review = scopedRuns.reduce((sum, run) => sum + (run.n_review || 0), 0);
+  const disqualified = scopedRuns.reduce((sum, run) => sum + (run.n_disqualified || 0), 0);
+  const label = formatCampaignName(activeCampaign.id, activeCampaign.name);
+
+  document.getElementById('campaign-view-title').textContent = label;
+  document.getElementById('campaign-view-meta').textContent = formatCampaignDescription(activeCampaign);
+  document.getElementById('campaign-sum-runs').textContent = scopedRuns.length;
+  document.getElementById('campaign-sum-leads').textContent = leads;
+  document.getElementById('campaign-sum-qual').textContent = qualified;
+  document.getElementById('campaign-sum-other').textContent = review + disqualified;
+  document.getElementById('campaign-runs-sub').textContent = scopedRuns.length
+    ? `${scopedRuns.length} runs for ${label}`
+    : `No runs for ${label} yet`;
+
+  const el = document.getElementById('campaign-runs-list');
+  el.innerHTML = scopedRuns.length
+    ? scopedRuns.map(run => renderRunItem(run, { current: run.run_id === currentRunId, maxName: 42 })).join('')
+    : '<div class="empty-state">No runs yet. Upload a CSV to create your first run.</div>';
+}
+
+function renderResultsRuns(runs) {
+  const el = document.getElementById('results-runs-list');
+  const activeRun = getRunMeta(currentRunId);
+  const scopedRuns = runs || [];
+  const labelCampaign = activeRun && activeRun.campaign_id
+    ? formatCampaignName(activeRun.campaign_id)
+    : currentCampaignId ? formatCampaignName(currentCampaignId) : 'all campaigns';
+  document.getElementById('results-runs-sub').textContent = `Jump between recent runs for ${labelCampaign}.`;
+  document.getElementById('results-see-all-runs-btn').classList.toggle('hidden', scopedRuns.length <= 6);
+  el.innerHTML = scopedRuns.length
+    ? scopedRuns.map(run => renderRunItem(run, { current: run.run_id === currentRunId, maxName: 30 })).join('')
+    : '<div class="empty-state">No runs loaded yet.</div>';
+}
+
+async function loadCampaigns() {
+  try {
+    const data = await fetch('/api/campaigns').then(r => r.json());
+    campaigns = Array.isArray(data) && data.length ? data : [
+      { id: 'seedance', name: 'Seedance', description: 'ByteDance AI video generation platform' },
+      { id: 'kling', name: 'Kling AI', description: 'Kuaishou cinematic AI video generation platform' },
+    ];
+  } catch (e) {
+    campaigns = [
+      { id: 'seedance', name: 'Seedance', description: 'ByteDance AI video generation platform' },
+      { id: 'kling', name: 'Kling AI', description: 'Kuaishou cinematic AI video generation platform' },
+    ];
+  }
+
+  const sel = document.getElementById('campaign-select');
+  if (sel) {
+    sel.innerHTML = campaigns.map(c => `<option value="${c.id}">${formatCampaignName(c.id, c.name)}</option>`).join('');
+  }
+  await refreshCampaignRuns();
+  if (currentCampaignId === null) currentCampaignId = null;
+  renderSidebarCampaigns();
+  renderHome();
+  if (document.getElementById('s-campaign').classList.contains('active') && currentCampaignId) renderCampaignView();
+}
+
+async function refreshCampaignRuns() {
+  if (!campaigns.length) {
+    campaignRunsById = {};
+    return;
+  }
+  const entries = await Promise.all(campaigns.map(async campaign => {
+    const fallbackRuns = allRuns.filter(run => (run.campaign_id || 'seedance') === campaign.id);
+    try {
+      const runs = await fetch(`${getCampaignApiBase(campaign.id)}/runs`).then(r => r.ok ? r.json() : fallbackRuns);
+      return [campaign.id, Array.isArray(runs) && runs.length ? runs : fallbackRuns];
+    } catch (e) {
+      return [campaign.id, fallbackRuns];
+    }
+  }));
+  campaignRunsById = Object.fromEntries(entries);
+}
+
+function renderUploadRuns(runs) {
+  const el = document.getElementById('upload-runs-list');
+  const countEl = document.getElementById('upload-runs-count');
+  countEl.textContent = runs.length ? `${runs.length} total` : 'No saved runs';
+  el.innerHTML = runs.length
+    ? runs.slice(0, 8).map(run => renderRunItem(run, {
+        current: run.run_id === currentRunId,
+        maxName: 30,
+        onClick: `closeUploadModal(); loadRun('${run.run_id}')`,
+      })).join('')
+    : `<div style="font-size:11px;color:var(--text3);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:4px 6px;">No historical runs yet</div>`;
+}
+
+function renderRunsModal(runs) {
+  const countEl = document.getElementById('runs-modal-count');
+  const el = document.getElementById('runs-modal-list');
+  countEl.textContent = runs.length ? `${runs.length} runs` : 'No runs';
+  el.innerHTML = runs.length
+    ? runs.map(run => renderRunItem(run, {
+        current: run.run_id === currentRunId,
+        onClick: `selectRunFromModal('${run.run_id}')`,
+        maxName: 34,
+      })).join('')
+    : '<div class="runs-modal-empty">No runs yet</div>';
+}
+
+async function loadPastRuns() {
+  const runs = await fetch('/api/runs').then(r => r.json());
+  allRuns = runs;
+  await refreshCampaignRuns();
+  renderUploadRuns(runs);
+  renderRunsModal(runs);
+  renderHome();
+  if (document.getElementById('s-campaign').classList.contains('active') && currentCampaignId) renderCampaignView();
+  renderResultsRuns(getResultsContextRuns());
+}
+
+async function loadRun(runId) {
+  closeUploadModal();
+  currentRunId = runId;
+  setRunIdInUrl(runId);
+  const runMeta = getRunMeta(runId);
+  if (runMeta && runMeta.campaign_id) currentCampaignId = runMeta.campaign_id;
+  const [leads, previews] = await Promise.all([
+    fetch('/api/results/' + runId).then(r => r.json()),
+    fetch('/api/runs/' + runId + '/email-preview')
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => []),
+  ]);
+  emailPreviews = {};
+  (Array.isArray(previews) ? previews : []).forEach(p => { emailPreviews[p.lead_id] = p; });
+  updateSendButton();
+  populateResults(leads, runId);
+  renderHome();
+  show('s-results');
+}
+
+function populateResults(leads, runId) {
+  allLeads = leads;
+  currentFilter = 'all';
+  visibleLeadCount = INITIAL_LEADS_PAGE;
+  const counts = { qualified: 0, review: 0, disqualified: 0 };
+  leads.forEach(lead => { counts[lead.decision] = (counts[lead.decision] || 0) + 1; });
+  const total = leads.length;
+
+  document.getElementById('cnt-qual').textContent = counts.qualified;
+  document.getElementById('cnt-rev').textContent = counts.review;
+  document.getElementById('cnt-dis').textContent = counts.disqualified;
+  document.getElementById('sum-qual').textContent = counts.qualified;
+  document.getElementById('sum-rev').textContent = counts.review;
+  document.getElementById('sum-dis').textContent = counts.disqualified;
+  ['cnt-all', 'sum-total'].forEach(id => { document.getElementById(id).textContent = total; });
+
+  const runMeta = getRunMeta(runId);
+  if (runMeta && runMeta.campaign_id) currentCampaignId = runMeta.campaign_id;
+  const metaBits = [
+    `${total} leads`,
+    runMeta && runMeta.filename ? runMeta.filename : runId.slice(0, 8),
+    runMeta ? formatRunDateTime(runMeta.created_at) : new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+  ];
+  document.getElementById('page-meta').textContent = metaBits.join(' · ');
+
+  const badge = document.getElementById('page-campaign-badge');
+  if (badge && runMeta && runMeta.campaign_id) {
+    badge.textContent = formatCampaignName(runMeta.campaign_id);
+    badge.style.display = 'inline-block';
+  } else if (badge) {
+    badge.style.display = 'none';
+  }
+
+  document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.toggle('active', chip.dataset.filter === 'all'));
+  document.querySelector('.results-main').scrollTop = 0;
+  renderResultsRuns(getResultsContextRuns());
+  renderLeads('all');
+}
+
+function filterLeads(filter) {
+  currentFilter = filter;
+  visibleLeadCount = INITIAL_LEADS_PAGE;
+  document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.toggle('active', chip.dataset.filter === filter));
+  document.querySelector('.results-main').scrollTop = 0;
+  renderLeads(filter);
+}
+
+async function openSettings() {
+  document.getElementById('settings-kicker').textContent = 'Settings';
+  document.getElementById('settings-meta').textContent = 'Global configuration shared across every campaign';
+  const [globalSettings, excl, tmpls] = await Promise.all([
+    fetch('/api/settings').then(r => r.json()).catch(() => appSettings),
+    fetch('/api/exclusions').then(r => r.json()).catch(() => []),
+    fetch('/api/email-templates').then(r => r.json()).catch(() => []),
+  ]);
+  const s = {
+    qualified_threshold: globalSettings.qualified_threshold ?? appSettings.qualified_threshold,
+    disqualified_threshold: globalSettings.disqualified_threshold ?? appSettings.disqualified_threshold,
+    apollo_enabled: globalSettings.apollo_enabled ?? appSettings.apollo_enabled ?? false,
+  };
+  appSettings = s;
+  exclusions = excl;
+  emailTemplates = tmpls;
+  document.getElementById('input-qual-threshold').value = s.qualified_threshold;
+  document.getElementById('input-dis-threshold').value = s.disqualified_threshold;
+  const apolloOn = !!s.apollo_enabled;
+  document.getElementById('apollo-toggle').checked = apolloOn;
+  const statusEl = document.getElementById('apollo-status');
+  statusEl.textContent = apolloOn ? 'Enabled' : 'Disabled';
+  statusEl.className = 'apollo-status ' + (apolloOn ? 'on' : 'off');
+  renderExclusions();
+  renderTemplates();
+  switchSettingsTab('pipeline');
+  show('s-settings');
+}
+
+function backToResults() {
+  if (currentRunId) {
+    show('s-results');
+  } else {
+    currentCampaignId ? openCampaignView(currentCampaignId) : openHome();
+  }
+}
+
+async function deleteCurrentRun() {
+  closeModal();
+  if (!currentRunId) return;
+  await fetch('/api/runs/' + currentRunId, { method: 'DELETE' });
+  currentRunId = null;
+  allLeads = [];
+  resetUploadForm();
+  clearRunIdFromUrl();
+  await loadPastRuns();
+  currentCampaignId ? openCampaignView(currentCampaignId) : openHome();
+}
+
+async function startRun() {
+  if (!selectedFile) return;
+  const campaign = document.getElementById('campaign-select').value;
+  currentCampaignId = campaign;
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+  fd.append('concurrency', concurrency);
+  fd.append('campaign', campaign);
+  closeUploadModal(true);
+  resetProgress();
+  show('s-progress');
+  const { run_id } = await fetch('/api/run', { method: 'POST', body: fd }).then(r => r.json());
+  currentRunId = run_id;
+  setRunIdInUrl(run_id);
+  connectSSE(run_id);
+}
+
+async function viewExisting() {
+  const runs = await fetch('/api/runs').then(r => r.json());
+  if (!runs.length) {
+    alert('No runs found. Upload a CSV to get started.');
+    return;
+  }
+  closeUploadModal();
+  await loadRun(runs[0].run_id);
+}
+
+async function saveApollo() {
+  const enabled = document.getElementById('apollo-toggle').checked;
+  const globalSettings = await fetch('/api/settings').then(r => r.json()).catch(() => ({
+    qualified_threshold: 70,
+    disqualified_threshold: 60,
+    apollo_enabled: false,
+  }));
+  await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      qualified_threshold: globalSettings.qualified_threshold,
+      disqualified_threshold: globalSettings.disqualified_threshold,
+      apollo_enabled: enabled,
+    }),
+  });
+  appSettings.apollo_enabled = enabled;
+  const statusEl = document.getElementById('apollo-status');
+  statusEl.textContent = enabled ? 'Enabled' : 'Disabled';
+  statusEl.className = 'apollo-status ' + (enabled ? 'on' : 'off');
+}
+
+async function saveThresholds() {
+  const qt = parseInt(document.getElementById('input-qual-threshold').value, 10);
+  const dt = parseInt(document.getElementById('input-dis-threshold').value, 10);
+  if (isNaN(qt) || isNaN(dt) || dt >= qt) {
+    alert('Review threshold must be a number less than the qualified threshold.');
+    return;
+  }
+  const resp = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      qualified_threshold: qt,
+      disqualified_threshold: dt,
+      apollo_enabled: !!appSettings.apollo_enabled,
+    }),
+  });
+  if (!resp.ok) {
+    alert((await resp.json()).error);
+    return;
+  }
+  appSettings = { ...appSettings, qualified_threshold: qt, disqualified_threshold: dt };
+  const btn = document.getElementById('save-thresholds-btn');
+  btn.textContent = 'Saved ✓';
+  btn.classList.add('saved');
+  setTimeout(() => { btn.textContent = 'Save thresholds'; btn.classList.remove('saved'); }, 2000);
+  if (currentRunId) reclassifyAndRender();
+}
+
+async function importExclusionCsv(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const btn = document.getElementById('import-csv-btn');
+  btn.textContent = 'Importing…';
+  btn.disabled = true;
+  try {
+    const importResp = await fetch('/api/exclusions/import', { method: 'POST', body: fd });
+    const data = await importResp.json();
+    if (importResp.ok) {
+      exclusions = await fetch('/api/exclusions').then(r => r.json());
+      renderExclusions();
+      btn.textContent = `✓ Imported ${data.imported}`;
+      btn.classList.add('saved');
+      setTimeout(() => { btn.textContent = 'Import CSV'; btn.classList.remove('saved'); }, 3000);
+    } else {
+      alert(data.error || 'Failed to import exclusions.');
+    }
+  } finally {
+    btn.disabled = false;
+    input.value = '';
+  }
+}
+
+async function addExclusion() {
+  const input = document.getElementById('exclusion-input');
+  const value = input.value.trim();
+  if (!value) return;
+  await fetch('/api/exclusions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  input.value = '';
+  exclusions = await fetch('/api/exclusions').then(r => r.json());
+  renderExclusions();
+}
+
+async function removeExclusion(id) {
+  await fetch('/api/exclusions/' + id, { method: 'DELETE' });
+  exclusions = exclusions.filter(e => e.id !== id);
+  renderExclusions();
+}
+
+async function saveTmpl() {
+  const vertical = document.getElementById('tmpl-vertical').value;
+  const name = document.getElementById('tmpl-name').value.trim();
+  const subject = document.getElementById('tmpl-subject').value.trim();
+  const body = document.getElementById('tmpl-body').value.trim();
+  if (!name || !subject || !body) {
+    alert('Name, subject, and body are required.');
+    return;
+  }
+  const resp = await fetch('/api/email-templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vertical, name, subject, body }),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    alert(data.error || 'Failed to save template.');
+    return;
+  }
+  const t = await resp.json();
+  emailTemplates.push(t);
+  renderTemplates();
+  toggleTmplForm();
+}
+
+const campaignSelect = document.getElementById('campaign-select');
+if (campaignSelect) {
+  campaignSelect.addEventListener('change', () => {
+    updateUploadModalContext(campaignSelect.value);
+  });
+}
+
+async function boot() {
+  await loadCampaigns();
+  await loadPastRuns();
+  const requestedRunId = getRunIdFromUrl();
+  if (!requestedRunId) {
+    openHome(null);
+    return;
+  }
+  const requestedRun = allRuns.find(r => r.run_id === requestedRunId);
+  if (requestedRun) {
+    await loadRun(requestedRunId);
+  } else {
+    openHome(null);
+  }
+}
+
+boot();
+</script>
+</body>
+</html>
