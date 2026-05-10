@@ -825,10 +825,13 @@ async def seed_skill_files_from_disk(pool: asyncpg.Pool, skills_root) -> None:
     root = _Path(skills_root)
     editable = {".md", ".json"}
 
-    # 1. Remove DB rows for campaign_ids whose directory no longer exists on disk
+    # 1. Remove DB rows for campaign_ids whose directory no longer exists on disk,
+    #    but only if they are NOT registered in the campaigns table.
+    #    Campaigns created via the UI (no disk directory) must be preserved.
     disk_ids = {d.name for d in root.iterdir() if d.is_dir()}
     db_ids = set(await list_skill_campaign_ids(pool))
-    orphaned = db_ids - disk_ids
+    registered_ids = {r["id"] for r in await pool.fetch("SELECT id FROM campaigns")}
+    orphaned = (db_ids - disk_ids) - registered_ids
     for cid in orphaned:
         await pool.execute("DELETE FROM skill_files WHERE campaign_id = $1", cid)
         _log.info("skill_files: removed orphaned campaign_id '%s' from DB", cid)

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt http://localhost:8080/api/progress/34d35267-11a6-406d-886e-bf159b8c0774 --max-time 5)",
+      "Bash(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8080/login -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode username=admin --data-urlencode password=admin -o /dev/null -w '%{http_code}')",
+      "Bash(python3 -m py_compile main.py)",
+      "Bash(python3 -m py_compile db/store.py ui/server.py)",
+      "Bash(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt http://localhost:8080/api/campaigns)"
+    ]
+  }
+}

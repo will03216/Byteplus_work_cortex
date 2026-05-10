@@ -463,8 +463,8 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
     <div class="nav-block">
       <div class="nav-label">Navigation</div>
       <div class="nav-list">
-        <button class="nav-btn active" id="nav-home" onclick="openHome()"><span>Home</span><span class="nav-btn-tag">Home</span></button>
-        <button class="nav-btn" id="nav-results" onclick="openLatestResults()"><span>Results</span><span class="nav-btn-tag">Latest run</span></button>
+        <button class="nav-btn active" id="nav-home" onclick="openHome()"><span>Home</span></button>
+        <button class="nav-btn" id="nav-results" onclick="openLatestResults()"><span>Latest run</span></button>
       </div>
     </div>
 
@@ -490,9 +490,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
       <div class="home-shell">
         <div class="home-hero">
           <div>
-            <div class="page-kicker" id="home-kicker">Home</div>
             <div class="page-title" id="home-title">Campaigns overview</div>
-            <div class="page-meta" id="home-meta">Choose a campaign, upload new CSVs, and jump back into recent runs.</div>
           </div>
           <div class="toolbar-actions">
             <button class="toolbar-btn primary" onclick="goToUpload('seedance')">New run</button>
@@ -511,7 +509,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
             <div class="panel-head">
               <div>
                 <div class="panel-title">Campaigns</div>
-                <div class="panel-sub">Campaigns are first-class objects now, not just an upload dropdown.</div>
+                <div class="panel-sub">Choose a campaign to open its dedicated runs view.</div>
               </div>
             </div>
             <div class="campaign-grid" id="home-campaigns-grid">
@@ -661,7 +659,6 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
       <main class="settings-main" style="padding:0;">
         <div class="results-toolbar">
           <div class="page-header" style="margin-bottom:0;">
-            <div class="page-kicker" id="settings-kicker">Settings</div>
             <div class="page-title">Settings</div>
             <div class="page-meta" id="settings-meta">Pipeline configuration</div>
           </div>
@@ -2160,9 +2157,8 @@ function renderHome() {
   const review = scopedRuns.reduce((sum, run) => sum + (run.n_review || 0), 0);
   const disqualified = scopedRuns.reduce((sum, run) => sum + (run.n_disqualified || 0), 0);
 
-  document.getElementById('home-kicker').textContent = 'Home';
-  document.getElementById('home-title').textContent = 'Campaigns overview';
-  document.getElementById('home-meta').textContent = 'Choose a campaign to open its dedicated runs view.';
+  const homeTitleEl = document.getElementById('home-title');
+  if (homeTitleEl) homeTitleEl.textContent = 'Campaigns overview';
 
   document.getElementById('home-sum-runs').textContent = scopedRuns.length;
   document.getElementById('home-sum-leads').textContent = leads;
@@ -2394,7 +2390,6 @@ function filterLeads(filter) {
 }
 
 async function openSettings() {
-  document.getElementById('settings-kicker').textContent = 'Settings';
   document.getElementById('settings-meta').textContent = 'Global configuration shared across every campaign';
   const [globalSettings, excl, tmpls] = await Promise.all([
     fetch('/api/settings').then(r => r.json()).catch(() => appSettings),

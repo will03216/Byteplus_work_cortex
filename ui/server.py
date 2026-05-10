@@ -1039,13 +1039,15 @@ def _skill_campaigns() -> list[dict]:
 async def api_skills_campaigns(request: Request):
     _require_auth(request)
     if _pool:
-        ids = await store.list_skill_campaign_ids(_pool)
+        # Use skill_files for common (always disk-seeded) and campaigns table for
+        # campaign tabs — so UI-created campaigns (no disk dir) always appear.
+        skill_ids = set(await store.list_skill_campaign_ids(_pool))
+        db_campaigns = await store.list_campaigns(_pool)
         groups = []
-        if "common" in ids:
+        if "common" in skill_ids:
             groups.append({"id": "common", "name": "Common (shared)", "is_common": True})
-        for cid in sorted(ids):
-            if cid != "common":
-                groups.append({"id": cid, "name": cid.replace("-", " ").capitalize(), "is_common": False})
+        for c in sorted(db_campaigns, key=lambda x: x["id"]):
+            groups.append({"id": c["id"], "name": c["name"], "is_common": False})
         return JSONResponse(groups)
     return JSONResponse(_skill_campaigns())
 

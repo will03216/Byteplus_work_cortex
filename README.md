@@ -1,8 +1,8 @@
-# Claude Brain For Lead Generation
+# Cortex For Lead Generation
 
 This repository contains the current working prototype of the Seedance lead generation engine: an LLM-powered qualification and prioritization pipeline designed to turn noisy outbound signals into a ranked, auditable lead list.
 
-The long-term vision is bigger than lead scoring. The goal is to build a reusable "Claude brain" for outbound: a context-aware system that understands Seedance's ICP, product, sales messaging, target personas, buying signals, and outreach style, then helps SDRs and AEs decide who to target and how to engage them.
+The long-term vision is bigger than lead scoring. The goal is to build a reusable "Cortex" for outbound: a context-aware system that understands Seedance's ICP, product, sales messaging, target personas, buying signals, and outreach style, then helps SDRs and AEs decide who to target and how to engage them.
 
 Today, the repo implements the first practical layer of that vision:
 
@@ -24,7 +24,7 @@ The current system focuses on the shortest path to value:
 
 - use existing lead exports and Trigify data
 - enrich them with lightweight external context where possible
-- have Claude extract structured evidence first, then score fit second
+- have Cortex extract structured evidence first, then score fit second
 - route each lead into `qualified`, `review`, or `disqualified`
 - preserve artifacts so the team can debug false positives and improve the rubric quickly
 
@@ -52,7 +52,7 @@ In the short term, success means producing a better ranked lead list than today'
 
 ### Vision Statement
 
-Build a Seedance "Claude brain" that acts as a context-aware outbound operator for lead qualification, account prioritization, and eventually personalized outreach support.
+Build Seedance Cortex as a context-aware outbound operator for lead qualification, account prioritization, and eventually personalized outreach support.
 
 ### Why This Matters
 
@@ -75,7 +75,7 @@ This project is intended to evolve from a lead qualification engine into a broad
 - outreach drafting
 - repetitive AE and SDR workflows
 
-Claude is expected to handle reasoning and personalization. Tools such as Clay or other enrichment systems can later supply structured firmographic, contact, and intent data.
+Cortex is expected to use LLM reasoning and personalization. Tools such as Clay or other enrichment systems can later supply structured firmographic, contact, and intent data.
 
 ---
 
@@ -87,7 +87,7 @@ Claude is expected to handle reasoning and personalization. Tools such as Clay o
 - Trigify-style CSV parsing into a normalized lead schema
 - lead normalization and deduplication
 - lightweight enrichment
-- two-stage Claude reasoning pipeline
+- two-stage Cortex reasoning pipeline
 - Python-side score validation and routing
 - CSV outputs for action queues
 - per-lead JSON artifacts for auditability
@@ -131,9 +131,9 @@ Normalization
         ↓
 Enrichment
         ↓
-Claude Stage 1: Evidence Extraction
+Cortex Stage 1: Evidence Extraction
         ↓
-Claude Stage 2: Qualification Decision
+Cortex Stage 2: Qualification Decision
         ↓
 Python Decision Router
         ↓
@@ -142,9 +142,9 @@ CSV outputs + JSON artifacts
 
 ### Core Principle
 
-Claude is the reasoning engine. Python is the control plane.
+The LLM is the reasoning engine. Python is the control plane.
 
-Claude does not own workflow state, retries, routing, file output, or score integrity. Claude only returns structured JSON. Python orchestrates the pipeline and enforces deterministic behavior where possible.
+The LLM does not own workflow state, retries, routing, file output, or score integrity. Cortex only accepts structured JSON from the model. Python orchestrates the pipeline and enforces deterministic behavior where possible.
 
 ### Repository Structure
 
@@ -247,7 +247,7 @@ Current enrichment behavior:
 - `scrape_company_website()` fetches and summarizes homepage content
 - `scrape_linkedin_profile()` tries to recover public profile text and tenure clues
 
-### 6.5 Claude Stage 1: Evidence Extraction
+### 6.5 Cortex Stage 1: Evidence Extraction
 
 Stage 1 does not score leads. It extracts structured evidence.
 
@@ -269,7 +269,7 @@ This separation is important. The engine explicitly distinguishes:
 
 That keeps the system more auditable and reduces the risk that confident inferences get treated like facts.
 
-### 6.6 Claude Stage 2: Qualification Decision
+### 6.6 Cortex Stage 2: Qualification Decision
 
 Stage 2 receives only the Stage 1 output, not the raw lead.
 
@@ -424,7 +424,7 @@ This weighting reflects the latest code and prompt calibration, which now puts t
 
 ---
 
-## 9. Why The Two-Stage Claude Design Matters
+## 9. Why The Two-Stage Cortex Design Matters
 
 The system intentionally splits reasoning into two steps.
 
@@ -685,148 +685,142 @@ The disqualified CSV captures:
 Artifacts are the real source of truth for debugging. They preserve:
 
 - what entered the pipeline
-- what Claude extracted
-- what Claude scored after Python validation
+- what Cortex extracted
+- what Cortex scored after Python validation
 
 ---
 
 ## 13. Existing Knowledge Sources In The Repo
 
-The current repo already contains a structured knowledge layer in `skills/`:
+The repo already includes a structured knowledge layer under `skills/`. These files capture the campaign-specific and shared business context that Cortex uses for qualification:
 
-- `skills/seedance-icp/SKILL.md`
-- `skills/lead-qualification/SKILL.md`
-- `skills/trigify-signal-scoring/SKILL.md`
-- `skills/disqualification-rules/SKILL.md`
+- product context
+- ICP and persona definitions
+- signal interpretation rules
+- qualification logic
+- disqualification rules
+- shared evidence extraction guidance
 
-These files are important because they represent the beginning of the broader context-engineering approach. They are not just implementation notes. They are the raw ingredients for the future Claude brain knowledge layer.
-
-Right now they are effectively source material for the prompts. In a later version they can become dynamically loaded context modules.
+Today, these files act as managed prompt inputs. Over time, they can evolve into a richer context layer that is versioned, reviewed, and reused across campaigns.
 
 ---
 
 ## 14. Pilot Plan
 
-The agreed pilot shape from the Antti discussion is:
+The recommended pilot is simple and practical:
 
-- take the latest 100 leads
-- have Antti manually identify the top 10
-- run all 100 through the engine
-- compare model ranking and routing against Antti's judgment
-- refine ICP, disqualifiers, scoring, and signal interpretation based on the gaps
+- take a recent batch of 100 leads
+- have Antti manually identify the top 10 accounts or contacts
+- run the same batch through Cortex
+- compare routing, scores, and ranking against that human baseline
+- refine ICP, disqualifiers, thresholds, and signal interpretation based on misses
 
-This is the right first validation step because it tests usefulness against real business judgment instead of only technical correctness.
+This pilot matters because the real question is not whether the system runs. It is whether Cortex improves business judgment, reduces review time, and surfaces better leads than the current process.
 
 ---
 
 ## 15. What Is Still Missing For Production Level
 
-The engine architecture is in place, but production-level outbound requires more than a working batch script.
+The core architecture is in place, but production readiness still requires work across product, data, workflow, and reliability.
 
-### Business / Product Gaps
+### Product And Calibration
 
-- final ICP, persona, and anti-ICP calibration using real company data
-- clearer definition of success metrics for qualification precision and ranking quality
-- consistent human review loop for false positives and false negatives
-- brand-voice and outreach-context assets for next-step messaging generation
+- final ICP, persona, and anti-ICP tuning using real lead outcomes
+- clearer evaluation metrics for precision, recall, and ranking quality
+- a regular human review loop for false positives and false negatives
+- stronger campaign messaging and brand-voice assets for downstream outreach
 
-### Data / Enrichment Gaps
+### Data And Enrichment
 
-- real company and people enrichment APIs
-- reliable signal ingestion beyond current CSV exports
-- stronger coverage for company size, funding, hiring, and time-in-role
-- better handling of missing or partial data
+- more reliable company and people enrichment sources
+- better signal coverage for funding, hiring, seniority, and recency
+- ingestion beyond CSV exports into more repeatable upstream pipelines
+- stronger handling for sparse or partially missing lead data
 
-### Workflow Gaps
+### Workflow And Distribution
 
-- CRM integration
-- review workflow for SDRs
-- account-level ranking rather than only per-lead routing
-- outreach generation after qualification
+- CRM write-back and downstream workflow integration
+- a cleaner SDR review and approval process
+- account-level prioritization, not just lead-level routing
+- outreach drafting and next-best-action outputs once qualification quality is stable
 
-### Reliability / Engineering Gaps
+### Reliability And Operations
 
 - broader automated test coverage
-- monitoring and run-level metrics
-- stronger error handling around external enrichments
-- secrets and environment hardening
-- deployment path beyond local CLI usage
+- run-level monitoring, metrics, and alerting
+- stronger failure handling around external data dependencies
+- production-grade deployment, secrets management, and operational hardening
 
 ---
 
 ## 16. Next Steps
 
-For now, the most important next step is not a giant feature list. It is a disciplined iteration loop with Antti.
+The next phase should stay focused on a tight build-measure-improve loop rather than a broad feature expansion.
 
-### Immediate Operating Model
+### Immediate Priorities
 
-- collaborate with Antti every day
-- show iterative progress based on his inputs
-- review where the engine matched or missed his judgment
-- refine ICP rules, scoring, signal interpretation, and disqualifiers continuously
+- run the 100-lead pilot against Antti's ranked baseline
+- review where Cortex matched, missed, or over-weighted weak signals
+- refine scoring weights, thresholds, and disqualification logic
+- replace remaining placeholder assumptions with Seedance-specific targeting rules
 
 ### Near-Term Build Priorities
 
-- run the 100-lead pilot and benchmark against Antti's top 10
-- tighten prompts and weights based on pilot misses
-- replace placeholder business assumptions with actual Seedance targeting logic
-- add stronger enrichment for company, person, and momentum signals
-- add account-ranking and next-best-action outputs
-- generate draft outreach once qualification quality is strong enough
+- improve company, person, and momentum enrichment coverage
+- make review outputs more useful for SDR decision-making
+- add account-level prioritization on top of per-lead qualification
+- prepare outreach drafting only after qualification quality is consistently strong
 
 ### Medium-Term Priorities
 
 - integrate with CRM and AE workflows
-- move from lead-level qualification to daily prioritized account lists
-- build reusable context modules for product knowledge, messaging, and historical emails
-- pair Claude reasoning with structured enrichment from Clay or similar tools
+- expand the reusable context layer for product, ICP, and messaging
+- pair Cortex reasoning with stronger structured data sources such as Clay or similar systems
+- evolve from a qualification tool into a daily outbound operating layer
 
 ---
 
 ## 17. Estimated Time To Reach Production Level
 
-This depends on access to data, speed of decision-making, and how quickly Antti can review outputs daily. Assuming one focused builder, daily feedback from Antti, and no major procurement blockers, a realistic estimate is:
+The timeline depends mostly on data access, review speed, and how quickly the team can make calibration decisions. Assuming one focused builder, frequent feedback from Antti, and no major procurement blockers, a reasonable estimate is:
 
-### Phase 1: Qualification Accuracy And Pilot Readiness
+### Phase 1: Pilot Readiness
 
 Estimated time: `1-2 weeks`
 
 Focus:
 
 - calibrate ICP and scoring against real leads
-- run the 100-lead benchmark
-- improve ranking precision
-- replace placeholder assumptions with Seedance-specific logic
+- complete the 100-lead benchmark
+- improve ranking quality and reduce obvious false positives
 
-### Phase 2: Data And Workflow Hardening
+### Phase 2: Operational Hardening
 
 Estimated time: `1-2 weeks`
 
 Focus:
 
-- integrate reliable enrichment sources
-- improve data completeness
-- add clearer review-loop outputs
-- define operational metrics and acceptance thresholds
+- strengthen enrichment and data completeness
+- improve review outputs and evaluation metrics
+- define acceptance thresholds for internal use
 
-### Phase 3: Production Workflow Enablement
+### Phase 3: Workflow Integration
 
 Estimated time: `2-4 weeks`
 
 Focus:
 
-- CRM integration
-- outreach generation support
-- account-level prioritization
-- deployment, monitoring, and operational hardening
+- add CRM and workflow integrations
+- support account prioritization and outreach handoff
+- harden deployment, monitoring, and operational reliability
 
 ### Practical Estimate
 
-- production-ready pilot for internal SDR use: `3-4 weeks`
-- stronger production-level lead engine with integrations and operational guardrails: `5-8 weeks`
-- broader "AE operator" foundation beyond lead qualification: additional phased work after that
+- internal pilot ready for SDR use: `3-4 weeks`
+- stronger production-ready lead engine with integrations and guardrails: `5-8 weeks`
+- broader outbound operating layer beyond qualification: additional phased work after that
 
-This estimate assumes the team keeps the current daily iteration rhythm with Antti and avoids waiting for a perfectly polished v1 before testing with real leads.
+These estimates assume the team continues testing with real leads instead of waiting for a fully polished first release.
 
 ---
 
@@ -837,8 +831,8 @@ The current repository is the first useful building block, not the end state.
 The broader roadmap is:
 
 - move from prompt engineering to context engineering
-- centralize company knowledge so Claude reasons from the same source of truth every time
-- combine Claude for reasoning with structured data systems for signal collection
+- centralize company knowledge so Cortex reasons from the same source of truth every time
+- combine Cortex reasoning with structured data systems for signal collection
 - evolve from lead qualification into a daily outbound operating system for SDRs and AEs
 
 If this project works, the next version should not just answer "is this lead good?"
@@ -851,4 +845,4 @@ It should answer:
 - what signal triggered the recommendation
 - what message should be sent first
 
-That is the real "Claude brain" vision this repo is starting to implement.
+That is the real Cortex vision this repo is starting to implement.

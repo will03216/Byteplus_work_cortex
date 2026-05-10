@@ -172,7 +172,35 @@ async def run_batch(
     # Load campaign context — must happen before processing
     skills_root = Path(__file__).parent / "skills"
     load_all_campaigns(skills_root)
-    campaign = get_campaign(campaign_id)
+
+    # If campaign not found on disk (e.g. created via UI and stored in DB only),
+    # fall back to loading it from PostgreSQL.
+    try:
+        campaign = get_campaign(campaign_id)
+    except ValueError:
+        import os
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise
+        import asyncpg
+        from campaigns.loader import CampaignLoader
+        from campaigns.registry import reload_campaign_from_strings
+        logger.info("Campaign '%s' not on disk — loading from DB", campaign_id)
+        pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+        try:
+            rows = await pool.fetch(
+                "SELECT filename, content FROM skill_files WHERE campaign_id = $1", campaign_id
+            )
+            common = await pool.fetch(
+                "SELECT filename, content FROM skill_files WHERE campaign_id = 'common'"
+            )
+        finally:
+            await pool.close()
+        if not rows:
+            raise ValueError(f"Campaign '{campaign_id}' not found on disk or in DB")
+        files = {r["filename"]: r["content"] for r in common}
+        files.update({r["filename"]: r["content"] for r in rows})
+        campaign = CampaignLoader(skills_root).load_from_strings(campaign_id, files)
     logger.info("Campaign: %s (%s)", campaign.name, campaign.id)
 
     # Load leads — auto-detect format from file extension
