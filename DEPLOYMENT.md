@@ -248,27 +248,102 @@ http://YOUR_ECS_ELASTIC_IP:8080
 
 ---
 
-## Part 5 — Subsequent Deploys
+## Part 5 — Subsequent Deploys (ECS + RDS)
 
-When you push code changes:
+This is the standard deploy flow once infrastructure is already running.
+
+### Step 1 — Push new image from your local machine
 
 ```bash
-# 1. Build and push new image locally
-docker build --platform linux/amd64 -t lead-engine:latest .
-docker tag lead-engine:latest cr-mittul-ap-southeast-3.cr.bytepluses.com/mittul/lead-engine:latest
-docker push cr-mittul-ap-southeast-3.cr.bytepluses.com/mittul/lead-engine:latest
-
-# Or just run:
 make deploy
+# This runs deploy.sh: builds linux/amd64 image, tags :latest + :YYYYMMDD-HHMMSS, pushes both to CR
 ```
 
-Then in ECS browser terminal, pull and restart:
+Verify the new tag appeared: **CR Console → your repository → Tags**.
+
+---
+
+### Step 2 — SSH or open browser terminal on ECS
+
+Console → **ECS → your instance → Remote Connection**
+
+---
+
+### Step 3 — Pull new image and restart container
+
+Run as **one single line** in the ECS terminal (browser terminal breaks on multiline backslash commands):
+
+```bash
+docker stop lead-engine && docker rm lead-engine
+```
 
 ```bash
 docker pull cr-mittul-ap-southeast-3.cr.bytepluses.com/mittul/lead-engine:latest
-docker stop lead-engine && docker rm lead-engine
-# re-run the docker run command from Step 3.5
 ```
+
+```bash
+docker run -d --name lead-engine --restart unless-stopped -p 80:8080 -e DATABASE_URL="postgresql://DB_USER:DB_PASSWORD@RDS_PRIVATE_IP:5432/lead-pipeline" -e LLM_MODEL="seed-2-0-pro-260328" -e LLM_API_KEY="YOUR_ARK_API_KEY" -e LLM_PROVIDER="openai" -e LLM_API_BASE="https://ark.ap-southeast.bytepluses.com/api/v3" -e LLM_TIMEOUT_SECONDS="30" -e OUTPUT_DIR="./output" -e APP_USERNAME="admin" -e APP_PASSWORD="YOUR_APP_PASSWORD" -e SESSION_SECRET="YOUR_SESSION_SECRET" cr-mittul-ap-southeast-3.cr.bytepluses.com/mittul/lead-engine:latest
+```
+
+> Replace `DB_USER`, `DB_PASSWORD`, `RDS_PRIVATE_IP`, `YOUR_ARK_API_KEY`, `YOUR_APP_PASSWORD`, `YOUR_SESSION_SECRET` with your actual values.
+> Keep all secrets out of git — never commit them to this file.
+
+---
+
+### Step 4 — Verify startup
+
+```bash
+docker logs lead-engine --tail=20
+```
+
+Expected healthy output:
+```
+INFO | Loaded campaign 'kling' (Kling AI) — stage1 prompt: ...
+INFO | Loaded campaign 'seedance' (Seedance) — stage1 prompt: ...
+INFO | Campaigns loaded: kling, seedance
+INFO | skill_files: seeded N files from disk (INSERT … DO NOTHING)
+INFO | PostgreSQL connected: RDS_PRIVATE_IP:5432/lead-pipeline
+INFO | Application startup complete.
+INFO | Uvicorn running on http://0.0.0.0:8080
+```
+
+If you see `DB connection failed` — the container cannot reach RDS. Check:
+- `RDS_PRIVATE_IP` is correct (use IP not hostname — see Step 3.3)
+- RDS security group allows TCP 5432 from the ECS subnet CIDR
+- The error message will tell you the exact Python exception
+
+---
+
+### Step 5 — Verify in browser
+
+```
+http://YOUR_ECS_ELASTIC_IP
+```
+
+Run history and skill files in the DB are untouched by a redeploy — only the application code changes.
+
+---
+
+### Rollback
+
+Each deploy also pushes a timestamped tag (e.g. `:20260510-142301`). To roll back:
+
+```bash
+docker stop lead-engine && docker rm lead-engine
+docker pull cr-mittul-ap-southeast-3.cr.bytepluses.com/mittul/lead-engine:20260510-142301
+# then docker run ... with the timestamped tag instead of :latest
+```
+
+---
+
+## Local Docker dev (no ECS)
+
+```bash
+make dev        # docker compose up --build  (app + local postgres on pg_data volume)
+make dev-stop   # docker compose down        (stops containers, keeps pg_data volume intact)
+```
+
+> `docker compose down` preserves the `pg_data` named volume. Only `docker compose down -v` or Docker Desktop "Clean data" destroys it. Your local run history survives restarts.
 
 ---
 
@@ -277,9 +352,10 @@ docker stop lead-engine && docker rm lead-engine
 | Symptom | Cause | Fix |
 |---|---|---|
 | `docker push` → unexpected EOF | Wrong registry domain | Use `cr.bytepluses.com` not `cr.byteplus.com` |
-| Port 8080 timeout | Security group missing inbound rule | Add TCP 8080 from your IP |
-| App loads but no DB | NAT Gateway has no inbound route | Add Internet Gateway route to ECS subnet route table |
-| DB connection failed: Name not known | Docker can't resolve RDS hostname | Use private IP instead of hostname in DATABASE_URL |
+| Port 80 timeout | Security group missing inbound rule | Add TCP 80 inbound from your IP |
+| `DB connection failed: has no attribute 'seed_skill_files_from_disk'` | Running stale image built before recent code changes | Rebuild and redeploy: `make deploy` then restart container |
+| `DB connection failed: Name not known` | Docker can't resolve RDS hostname | Use private IP instead of hostname in `DATABASE_URL` |
+| App loads but runs show empty | App running without DB (check `docker logs`) | See above two rows |
 | `telnet RDS_IP 5432` hangs | RDS security group blocks port 5432 | Add inbound TCP 5432 from `192.168.0.0/24` |
-| `docker` not found on ECS | User Data didn't run | Install Docker manually via browser terminal (Step 3.2) |
-| Browser terminal shows `>` prompt | Multiline command paste issue | Run commands as single line, no backslashes |
+| `docker` not found on ECS | Docker not installed | Install Docker manually via browser terminal (Step 3.2) |
+| Browser terminal shows `>` prompt | Multiline command paste issue | Run each command separately, no backslashes |

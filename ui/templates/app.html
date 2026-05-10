@@ -391,6 +391,64 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
 .apollo-status { font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:6px; }
 .apollo-status.on  { color:var(--green); }
 .apollo-status.off { color:var(--text3); }
+
+/* ── Skills screen ── */
+.skills-shell { display:flex; flex-direction:column; gap:24px; }
+.skills-campaign-tabs { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.skills-tab { padding:8px 14px; border-radius:8px; border:1px solid var(--border); background:var(--bg2); color:var(--text2); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; transition:all 0.15s; }
+.skills-tab:hover { border-color:var(--border2); color:var(--text); }
+.skills-tab.active { border-color:var(--accent); color:var(--accent); background:rgba(200,255,87,0.06); }
+.skills-tab.common { border-color:var(--border2); }
+.skills-tab.common.active { border-color:var(--blue); color:var(--blue); background:rgba(96,165,250,0.06); }
+.skills-new-btn { padding:8px 14px; border-radius:8px; border:1px solid var(--border2); background:transparent; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; transition:all 0.15s; display:flex; align-items:center; gap:6px; }
+.skills-new-btn:hover { border-color:var(--accent); color:var(--accent); }
+.skills-body { display:grid; grid-template-columns:220px minmax(0,1fr); gap:18px; align-items:start; }
+.skills-file-list { background:var(--bg2); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+.skills-file-list-head { padding:12px 14px; border-bottom:1px solid var(--border); font-size:11px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.08em; }
+.skills-file-btn { display:flex; align-items:center; justify-content:space-between; width:100%; padding:10px 14px; border:none; background:transparent; color:var(--text2); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; transition:all 0.12s; text-align:left; border-bottom:1px solid var(--border); }
+.skills-file-btn:last-child { border-bottom:none; }
+.skills-file-btn:hover { background:var(--bg3); color:var(--text); }
+.skills-file-btn.active { background:var(--bg3); color:var(--text); }
+.skills-file-btn.active::before { content:''; display:inline-block; width:3px; height:14px; background:var(--accent); border-radius:2px; margin-right:8px; flex-shrink:0; }
+.skills-file-ext { font-size:10px; color:var(--text3); }
+.skills-editor-panel { background:var(--bg2); border:1px solid var(--border); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+.skills-editor-toolbar { display:flex; align-items:center; justify-content:space-between; padding:11px 14px; border-bottom:1px solid var(--border); background:var(--bg3); }
+.skills-editor-filename { font-size:13px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text2); }
+.skills-editor-actions { display:flex; align-items:center; gap:8px; }
+.skills-save-btn { padding:7px 16px; border-radius:7px; border:none; background:var(--accent); color:#0d0e0f; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; font-weight:700; cursor:pointer; transition:all 0.15s; }
+.skills-save-btn:hover:not(:disabled) { background:#d4ff3a; }
+.skills-save-btn:disabled { opacity:0.35; cursor:not-allowed; }
+.skills-editor-status { font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.skills-editor-status.saved { color:var(--green); }
+.skills-editor-status.saving { color:var(--amber); }
+.skills-editor-status.error { color:var(--red); }
+.skills-textarea { width:100%; min-height:520px; padding:16px; background:var(--bg); color:var(--text); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; line-height:1.7; border:none; resize:vertical; outline:none; }
+.skills-empty { padding:32px; text-align:center; color:var(--text3); font-size:13px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.skills-delete-btn { padding:7px 12px; border-radius:7px; border:1px solid var(--border); background:transparent; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:12px; cursor:pointer; transition:all 0.15s; }
+.skills-delete-btn:hover { border-color:var(--red); color:var(--red); background:var(--red-bg); }
+
+/* ── New campaign modal ── */
+.skills-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:999; }
+.skills-modal { background:var(--bg2); border:1px solid var(--border2); border-radius:16px; width:min(520px,92vw); padding:28px; display:flex; flex-direction:column; gap:20px; }
+.skills-modal-title { font-size:18px; font-weight:700; }
+.skills-modal-sub { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:4px; }
+.skills-field { display:flex; flex-direction:column; gap:6px; }
+.skills-field label { font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; }
+.skills-field input { padding:10px 12px; background:var(--bg3); border:1px solid var(--border2); border-radius:8px; color:var(--text); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:14px; outline:none; transition:border-color 0.15s; }
+.skills-field input:focus { border-color:var(--accent); }
+.skills-zip-drop { border:1px dashed var(--border2); border-radius:10px; padding:24px 16px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; background:var(--bg3); transition:all 0.15s; }
+.skills-zip-drop:hover, .skills-zip-drop.drag-over { border-color:var(--accent); background:rgba(200,255,87,0.04); }
+.skills-zip-drop-hint { font-size:14px; color:var(--text2); }
+.skills-zip-drop-sub { font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.skills-modal-actions { display:flex; gap:10px; justify-content:flex-end; }
+.skills-modal-cancel { padding:9px 18px; border-radius:8px; border:1px solid var(--border); background:transparent; color:var(--text2); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; cursor:pointer; transition:all 0.15s; }
+.skills-modal-cancel:hover { border-color:var(--border2); color:var(--text); }
+.skills-modal-create { padding:9px 18px; border-radius:8px; border:none; background:var(--accent); color:#0d0e0f; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:13px; font-weight:700; cursor:pointer; transition:all 0.15s; }
+.skills-modal-create:hover:not(:disabled) { background:#d4ff3a; }
+.skills-modal-create:disabled { opacity:0.35; cursor:not-allowed; }
+.skills-modal-error { font-size:13px; color:var(--red); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.skills-format-hint { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:12px 14px; font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; color:var(--text3); line-height:1.8; }
+.skills-format-hint strong { color:var(--text2); }
 </style>
 </head>
 <body>
@@ -420,6 +478,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
     <div class="nav-block bottom">
       <div class="nav-label">Workspace</div>
       <div class="nav-list">
+        <button class="nav-btn" id="nav-skills" onclick="openSkills()"><span>Skills</span><span class="nav-btn-tag">Editor</span></button>
         <button class="nav-btn" id="nav-settings" onclick="openSettings()"><span>Settings</span><span class="nav-btn-tag">Global</span></button>
       </div>
     </div>
@@ -727,7 +786,93 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
 
       </main>
     </section>
+
+<!-- ── Screen 5: Skills Editor ── -->
+    <section id="s-skills" class="screen app-screen">
+      <div class="skills-shell">
+        <div class="results-toolbar">
+          <div class="page-header" style="margin-bottom:0;">
+            <div class="page-kicker">Skills</div>
+            <div class="page-title">Skills Editor</div>
+            <div class="page-meta">Edit prompt files and create new campaigns</div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="toolbar-btn" id="skills-export-btn" onclick="exportSkillsCampaign()" disabled>&#8659; Export</button>
+            <button class="toolbar-btn primary" onclick="openNewCampaignModal()">+ New Campaign</button>
+          </div>
+        </div>
+
+        <!-- Campaign tabs -->
+        <div class="skills-campaign-tabs" id="skills-tabs">
+          <div class="empty-state">Loading…</div>
+        </div>
+
+        <!-- File list + editor -->
+        <div class="skills-body">
+          <div class="skills-file-list">
+            <div class="skills-file-list-head">Files</div>
+            <div id="skills-file-list-body">
+              <div class="skills-empty">Select a campaign above</div>
+            </div>
+          </div>
+
+          <div class="skills-editor-panel" id="skills-editor-panel">
+            <div class="skills-editor-toolbar">
+              <span class="skills-editor-filename" id="skills-editor-filename">No file selected</span>
+              <div class="skills-editor-actions">
+                <span class="skills-editor-status" id="skills-editor-status"></span>
+                <button class="skills-save-btn" id="skills-save-btn" onclick="saveSkillFile()" disabled>Save</button>
+              </div>
+            </div>
+            <div class="skills-empty" id="skills-editor-empty">Select a file from the list to start editing.</div>
+            <textarea class="skills-textarea" id="skills-textarea" style="display:none"
+              oninput="onSkillsEditorChange()" spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <!-- Campaign delete (shown for non-common, non-seedance campaigns) -->
+        <div id="skills-delete-row" style="display:none;">
+          <button class="skills-delete-btn" id="skills-delete-btn" onclick="deleteSkillCampaign()">Delete campaign</button>
+        </div>
+      </div>
+    </section>
   </main>
+</div>
+
+<!-- ── New Campaign Modal ── -->
+<div class="skills-modal-backdrop" id="skills-modal-backdrop" style="display:none;" onclick="if(event.target===this) closeNewCampaignModal()">
+  <div class="skills-modal">
+    <div>
+      <div class="skills-modal-title">New Campaign</div>
+      <div class="skills-modal-sub">Upload a zip with your campaign skill files to register a new campaign instantly.</div>
+    </div>
+    <div class="skills-field">
+      <label>Campaign Name</label>
+      <input type="text" id="skills-new-name" placeholder="e.g. Google Veo" oninput="validateNewCampaignForm()">
+    </div>
+    <div class="skills-field">
+      <label>Skill Files (zip)</label>
+      <div class="skills-zip-drop" id="skills-zip-drop" onclick="document.getElementById('skills-zip-input').click()"
+           ondragover="event.preventDefault();this.classList.add('drag-over')"
+           ondragleave="this.classList.remove('drag-over')"
+           ondrop="handleSkillsZipDrop(event)">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--text3)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <div class="skills-zip-drop-hint" id="skills-zip-drop-hint">Drop zip here or click to browse</div>
+        <div class="skills-zip-drop-sub">campaign.zip</div>
+      </div>
+      <input type="file" id="skills-zip-input" accept=".zip" style="display:none" onchange="handleSkillsZipSelect(event)">
+    </div>
+    <div class="skills-format-hint">
+      <strong>All 6 files are required inside the zip:</strong><br>
+      config.json &nbsp;·&nbsp; product.md &nbsp;·&nbsp; icp.md<br>
+      signals.md &nbsp;·&nbsp; disqualification.md &nbsp;·&nbsp; qualification.md
+    </div>
+    <div class="skills-modal-error" id="skills-modal-error" style="display:none;"></div>
+    <div class="skills-modal-actions">
+      <button class="skills-modal-cancel" onclick="closeNewCampaignModal()">Cancel</button>
+      <button class="skills-modal-create" id="skills-modal-create-btn" onclick="createNewCampaign()" disabled>Create Campaign</button>
+    </div>
+  </div>
 </div>
 
 <div class="modal-overlay hidden" id="upload-modal" onclick="if(event.target===this) closeUploadModal()">
@@ -997,6 +1142,36 @@ function clearRunIdFromUrl() {
 function getRunIdFromUrl() {
   return new URL(window.location.href).searchParams.get('run_id');
 }
+
+// ── Client-side routing ───────────────────────────────────────────────────────
+
+function pushRoute(path) {
+  if (location.pathname !== '/' + path) {
+    history.pushState({ path }, '', '/' + path);
+  }
+}
+
+async function readRoute() {
+  const path = location.pathname.replace(/^\//, '');
+  const [section, ...rest] = path.split('/');
+  const param = rest.join('/');
+  if (section === 'campaign' && param) {
+    if (campaigns.find(c => c.id === param)) { openCampaignView(param); return; }
+  } else if (section === 'run' && param) {
+    if (allRuns.find(r => r.run_id === param)) { await loadRun(param); return; }
+  } else if (section === 'settings') {
+    await openSettings(); return;
+  } else if (section === 'skills') {
+    await openSkills(param || null); return;
+  } else {
+    // Legacy support: ?run_id= query param
+    const legacyRun = new URLSearchParams(location.search).get('run_id');
+    if (legacyRun && allRuns.find(r => r.run_id === legacyRun)) { await loadRun(legacyRun); return; }
+  }
+  openHome();
+}
+
+window.addEventListener('popstate', readRoute);
 
 function getRunMeta(runId) {
   return allRuns.find(r => r.run_id === runId) || null;
@@ -1788,7 +1963,7 @@ async function deleteTmpl(id) {
   renderTemplates();
 }
 
-const SHELL_SCREENS = new Set(['s-home', 's-campaign', 's-results', 's-settings']);
+const SHELL_SCREENS = new Set(['s-home', 's-campaign', 's-results', 's-settings', 's-skills']);
 
 function getDefaultCampaignId() {
   return campaigns.find(c => c.id === 'seedance')?.id || (campaigns[0] && campaigns[0].id) || 'seedance';
@@ -1883,6 +2058,7 @@ function updateSidebarState(activeScreenId) {
     'nav-home': activeScreenId === 's-home',
     'nav-results': activeScreenId === 's-results',
     'nav-settings': activeScreenId === 's-settings',
+    'nav-skills': activeScreenId === 's-skills',
   };
   Object.entries(navMap).forEach(([id, isActive]) => {
     const el = document.getElementById(id);
@@ -1931,7 +2107,7 @@ function openUploadModal(campaignId = currentCampaignId) {
   if (targetCampaign) currentCampaignId = targetCampaign;
   if (select && targetCampaign) select.value = targetCampaign;
   updateUploadModalContext(targetCampaign);
-  loadPastRuns();
+  renderUploadRuns(allRuns);
   document.getElementById('upload-modal').classList.remove('hidden');
 }
 
@@ -1943,12 +2119,14 @@ function openHome(campaignId = null) {
   currentCampaignId = null;
   renderHome();
   show('s-home');
+  pushRoute('');
 }
 
 function openCampaignView(campaignId) {
   currentCampaignId = campaignId;
   renderCampaignView();
   show('s-campaign');
+  pushRoute('campaign/' + campaignId);
 }
 
 function openLatestResults() {
@@ -2112,14 +2290,15 @@ async function refreshCampaignRuns() {
 function renderUploadRuns(runs) {
   const el = document.getElementById('upload-runs-list');
   const countEl = document.getElementById('upload-runs-count');
-  countEl.textContent = runs.length ? `${runs.length} total` : 'No saved runs';
-  el.innerHTML = runs.length
-    ? runs.slice(0, 8).map(run => renderRunItem(run, {
+  const filtered = currentCampaignId ? getRunsForCampaign(currentCampaignId) : runs;
+  countEl.textContent = filtered.length ? `${filtered.length} recent` : 'No runs yet';
+  el.innerHTML = filtered.length
+    ? filtered.slice(0, 8).map(run => renderRunItem(run, {
         current: run.run_id === currentRunId,
         maxName: 30,
         onClick: `closeUploadModal(); loadRun('${run.run_id}')`,
       })).join('')
-    : `<div style="font-size:11px;color:var(--text3);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:4px 6px;">No historical runs yet</div>`;
+    : `<div style="font-size:11px;color:var(--text3);font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:4px 6px;">No runs for this campaign yet</div>`;
 }
 
 function renderRunsModal(runs) {
@@ -2164,6 +2343,7 @@ async function loadRun(runId) {
   populateResults(leads, runId);
   renderHome();
   show('s-results');
+  pushRoute('run/' + runId);
 }
 
 function populateResults(leads, runId) {
@@ -2240,6 +2420,7 @@ async function openSettings() {
   renderTemplates();
   switchSettingsTab('pipeline');
   show('s-settings');
+  pushRoute('settings');
 }
 
 function backToResults() {
@@ -2420,20 +2601,286 @@ if (campaignSelect) {
 async function boot() {
   await loadCampaigns();
   await loadPastRuns();
-  const requestedRunId = getRunIdFromUrl();
-  if (!requestedRunId) {
-    openHome(null);
-    return;
-  }
-  const requestedRun = allRuns.find(r => r.run_id === requestedRunId);
-  if (requestedRun) {
-    await loadRun(requestedRunId);
-  } else {
-    openHome(null);
-  }
+  await readRoute();
 }
 
 boot();
+
+// ── Skills Editor ────────────────────────────────────────────────────────────
+
+let _skillsCampaigns = [];
+let _skillsActiveCampaignId = null;
+let _skillsActiveFile = null;
+let _skillsEditorDirty = false;
+let _skillsZipFile = null;
+
+async function openSkills(campaignId = null) {
+  if (campaignId) _skillsActiveCampaignId = campaignId;
+  show('s-skills');
+  pushRoute('skills' + (campaignId || _skillsActiveCampaignId ? '/' + (campaignId || _skillsActiveCampaignId) : ''));
+  await loadSkillsCampaigns();
+}
+
+async function loadSkillsCampaigns() {
+  const res = await fetch('/api/skills/campaigns');
+  _skillsCampaigns = await res.json();
+  renderSkillsTabs();
+  // Auto-select first campaign
+  if (_skillsCampaigns.length && !_skillsActiveCampaignId) {
+    await selectSkillCampaign(_skillsCampaigns[0].id);
+  } else if (_skillsActiveCampaignId) {
+    await selectSkillCampaign(_skillsActiveCampaignId);
+  }
+}
+
+function renderSkillsTabs() {
+  const el = document.getElementById('skills-tabs');
+  if (!el) return;
+  el.innerHTML = _skillsCampaigns.map(c => {
+    const isCommon = c.is_common;
+    const isActive = c.id === _skillsActiveCampaignId;
+    return `<button class="skills-tab${isCommon ? ' common' : ''}${isActive ? ' active' : ''}"
+      onclick="selectSkillCampaign('${c.id}')">${c.name}</button>`;
+  }).join('') + `<button class="skills-new-btn" onclick="openNewCampaignModal()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Campaign
+  </button>`;
+}
+
+async function selectSkillCampaign(campaignId) {
+  _skillsActiveCampaignId = campaignId;
+  _skillsActiveFile = null;
+  pushRoute('skills/' + campaignId);
+  renderSkillsTabs();
+
+  // Show/hide delete button
+  const deleteRow = document.getElementById('skills-delete-row');
+  const protected = new Set(['common', 'seedance', 'kling']);
+  const canDelete = !protected.has(campaignId);
+  if (deleteRow) deleteRow.style.display = canDelete ? 'block' : 'none';
+
+  // Enable export button
+  const exportBtn = document.getElementById('skills-export-btn');
+  if (exportBtn) exportBtn.disabled = false;
+
+  // Reset editor
+  resetSkillsEditor();
+
+  const res = await fetch(`/api/skills/${encodeURIComponent(campaignId)}`);
+  if (!res.ok) { renderSkillsFileList([]); return; }
+  const files = await res.json();
+  renderSkillsFileList(files);
+}
+
+function exportSkillsCampaign() {
+  if (!_skillsActiveCampaignId) return;
+  const a = document.createElement('a');
+  a.href = `/api/skills/${encodeURIComponent(_skillsActiveCampaignId)}/export`;
+  a.download = `${_skillsActiveCampaignId}-skills.zip`;
+  a.click();
+}
+
+function renderSkillsFileList(files) {
+  const el = document.getElementById('skills-file-list-body');
+  if (!files.length) {
+    el.innerHTML = '<div class="skills-empty">No editable files found.</div>';
+    return;
+  }
+  el.innerHTML = files.map(f => {
+    const ext = f.name.split('.').pop();
+    const isActive = f.name === _skillsActiveFile;
+    return `<button class="skills-file-btn${isActive ? ' active' : ''}"
+      onclick="selectSkillFile('${f.name}')">
+      <span>${f.name.replace('.' + ext, '')}</span>
+      <span class="skills-file-ext">.${ext}</span>
+    </button>`;
+  }).join('');
+}
+
+async function selectSkillFile(filename) {
+  if (_skillsEditorDirty) {
+    if (!confirm('You have unsaved changes. Discard them?')) return;
+  }
+  _skillsActiveFile = filename;
+  _skillsEditorDirty = false;
+
+  // Re-render file list to show active state
+  const listRes = await fetch(`/api/skills/${encodeURIComponent(_skillsActiveCampaignId)}`);
+  if (listRes.ok) renderSkillsFileList(await listRes.json());
+
+  // Load file content
+  setSkillsEditorStatus('');
+  const res = await fetch(`/api/skills/${encodeURIComponent(_skillsActiveCampaignId)}/${encodeURIComponent(filename)}`);
+  if (!res.ok) { setSkillsEditorStatus('Failed to load file', 'error'); return; }
+  const data = await res.json();
+
+  const textarea = document.getElementById('skills-textarea');
+  const empty = document.getElementById('skills-editor-empty');
+  const saveBtn = document.getElementById('skills-save-btn');
+  const filenameEl = document.getElementById('skills-editor-filename');
+
+  filenameEl.textContent = `${_skillsActiveCampaignId} / ${filename}`;
+  textarea.value = data.content;
+  textarea.style.display = 'block';
+  empty.style.display = 'none';
+  saveBtn.disabled = false;
+}
+
+function onSkillsEditorChange() {
+  _skillsEditorDirty = true;
+  setSkillsEditorStatus('');
+}
+
+async function saveSkillFile() {
+  if (!_skillsActiveCampaignId || !_skillsActiveFile) return;
+  const textarea = document.getElementById('skills-textarea');
+  const content = textarea.value;
+
+  setSkillsEditorStatus('Saving…', 'saving');
+  const saveBtn = document.getElementById('skills-save-btn');
+  saveBtn.disabled = true;
+
+  try {
+    const res = await fetch(
+      `/api/skills/${encodeURIComponent(_skillsActiveCampaignId)}/${encodeURIComponent(_skillsActiveFile)}`,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      setSkillsEditorStatus(data.error || 'Save failed', 'error');
+    } else {
+      _skillsEditorDirty = false;
+      const reloaded = (data.reloaded || []).join(', ');
+      const warn = data.reload_error ? ` (reload warning: ${data.reload_error})` : '';
+      setSkillsEditorStatus(`Saved${reloaded ? ' · reloaded: ' + reloaded : ''}${warn}`, 'saved');
+    }
+  } catch (e) {
+    setSkillsEditorStatus('Network error', 'error');
+  }
+  saveBtn.disabled = false;
+}
+
+function setSkillsEditorStatus(msg, type = '') {
+  const el = document.getElementById('skills-editor-status');
+  el.textContent = msg;
+  el.className = 'skills-editor-status' + (type ? ' ' + type : '');
+}
+
+function resetSkillsEditor() {
+  const textarea = document.getElementById('skills-textarea');
+  const empty = document.getElementById('skills-editor-empty');
+  const saveBtn = document.getElementById('skills-save-btn');
+  const filenameEl = document.getElementById('skills-editor-filename');
+  textarea.value = '';
+  textarea.style.display = 'none';
+  empty.style.display = 'block';
+  saveBtn.disabled = true;
+  filenameEl.textContent = 'No file selected';
+  setSkillsEditorStatus('');
+  _skillsEditorDirty = false;
+}
+
+async function deleteSkillCampaign() {
+  if (!_skillsActiveCampaignId || ['common', 'seedance', 'kling'].includes(_skillsActiveCampaignId)) return;
+  if (!confirm(`Delete campaign "${_skillsActiveCampaignId}"? This cannot be undone.`)) return;
+  const res = await fetch(`/api/skills/${encodeURIComponent(_skillsActiveCampaignId)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const d = await res.json();
+    alert(d.error || 'Delete failed');
+    return;
+  }
+  _skillsActiveCampaignId = null;
+  _skillsActiveFile = null;
+  await loadCampaigns();
+  await loadSkillsCampaigns();
+  openHome();
+}
+
+// ── New Campaign Modal ───────────────────────────────────────────────────────
+
+function openNewCampaignModal() {
+  _skillsZipFile = null;
+  document.getElementById('skills-new-name').value = '';
+  document.getElementById('skills-zip-drop-hint').textContent = 'Drop zip here or click to browse';
+  document.getElementById('skills-zip-input').value = '';
+  document.getElementById('skills-modal-error').style.display = 'none';
+  document.getElementById('skills-modal-create-btn').disabled = true;
+  document.getElementById('skills-modal-backdrop').style.display = 'flex';
+}
+
+function closeNewCampaignModal() {
+  document.getElementById('skills-modal-backdrop').style.display = 'none';
+  document.getElementById('skills-new-name').value = '';
+  document.getElementById('skills-modal-error').style.display = 'none';
+  const btn = document.getElementById('skills-modal-create-btn');
+  btn.textContent = 'Create Campaign';
+  btn.disabled = true;
+  _skillsZipFile = null;
+  const hint = document.getElementById('skills-zip-drop-hint');
+  if (hint) hint.textContent = 'Drop zip here or click to browse';
+}
+
+function handleSkillsZipDrop(event) {
+  event.preventDefault();
+  document.getElementById('skills-zip-drop').classList.remove('drag-over');
+  const f = event.dataTransfer.files[0];
+  if (f) setSkillsZipFile(f);
+}
+
+function handleSkillsZipSelect(event) {
+  const f = event.target.files[0];
+  if (f) setSkillsZipFile(f);
+}
+
+function setSkillsZipFile(f) {
+  _skillsZipFile = f;
+  document.getElementById('skills-zip-drop-hint').textContent = `${f.name} (${(f.size / 1024).toFixed(1)} KB)`;
+  validateNewCampaignForm();
+}
+
+function validateNewCampaignForm() {
+  const name = document.getElementById('skills-new-name').value.trim();
+  const btn = document.getElementById('skills-modal-create-btn');
+  btn.disabled = !(name && _skillsZipFile);
+}
+
+async function createNewCampaign() {
+  const name = document.getElementById('skills-new-name').value.trim();
+  if (!name || !_skillsZipFile) return;
+
+  const errorEl = document.getElementById('skills-modal-error');
+  const btn = document.getElementById('skills-modal-create-btn');
+  btn.textContent = 'Uploading…';
+  btn.disabled = true;
+  errorEl.style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('file', _skillsZipFile);
+
+  try {
+    const res = await fetch('/api/skills', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      errorEl.textContent = data.error || 'Failed to create campaign';
+      errorEl.style.display = 'block';
+      btn.textContent = 'Create Campaign';
+      btn.disabled = false;
+      return;
+    }
+    closeNewCampaignModal();
+    // Reload sidebar campaigns and skills tabs, then navigate to new campaign
+    await loadCampaigns();
+    _skillsActiveCampaignId = null;
+    await loadSkillsCampaigns();
+    await selectSkillCampaign(data.campaign_id);
+  } catch (e) {
+    errorEl.textContent = 'Network error — please try again';
+    errorEl.style.display = 'block';
+    btn.textContent = 'Create Campaign';
+    btn.disabled = false;
+  }
+}
 </script>
 </body>
 </html>

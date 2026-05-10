@@ -97,6 +97,16 @@ CREATE TABLE IF NOT EXISTS email_templates (
     body        TEXT        NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS skill_files (
+    id          SERIAL      PRIMARY KEY,
+    campaign_id TEXT        NOT NULL,
+    filename    TEXT        NOT NULL,
+    content     TEXT        NOT NULL DEFAULT '',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (campaign_id, filename)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_files_campaign ON skill_files(campaign_id);
 """
 
 
@@ -708,3 +718,172 @@ async def update_email_template(
 
 async def delete_email_template(pool: asyncpg.Pool, template_id: int) -> None:
     await pool.execute("DELETE FROM email_templates WHERE id=$1", template_id)
+
+
+# ── Skill files ───────────────────────────────────────────────────────────────
+
+async def seed_skill_file(
+    pool: asyncpg.Pool, campaign_id: str, filename: str, content: str
+) -> None:
+    """Insert a skill file row only if it does not already exist. Never overwrites."""
+    await pool.execute(
+        """INSERT INTO skill_files (campaign_id, filename, content)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (campaign_id, filename) DO NOTHING""",
+        campaign_id, filename, content,
+    )
+
+
+async def upsert_skill_file(
+    pool: asyncpg.Pool, campaign_id: str, filename: str, content: str
+) -> None:
+    """Insert or update a skill file (explicit user save — always overwrites)."""
+    await pool.execute(
+        """INSERT INTO skill_files (campaign_id, filename, content, updated_at)
+           VALUES ($1, $2, $3, now())
+           ON CONFLICT (campaign_id, filename)
+           DO UPDATE SET content = EXCLUDED.content, updated_at = now()""",
+        campaign_id, filename, content,
+    )
+
+
+async def list_skill_files(pool: asyncpg.Pool, campaign_id: str) -> list:
+    """Return file metadata (not content) for a campaign, ordered by filename."""
+    rows = await pool.fetch(
+        """SELECT filename, length(content) AS size, updated_at
+             FROM skill_files
+            WHERE campaign_id = $1
+            ORDER BY filename""",
+        campaign_id,
+    )
+    return [
+        {
+            "name":       r["filename"],
+            "size":       r["size"],
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        }
+        for r in rows
+    ]
+
+
+async def get_skill_file(
+    pool: asyncpg.Pool, campaign_id: str, filename: str
+) -> Optional[str]:
+    """Return the content of a single skill file, or None if not found."""
+    row = await pool.fetchrow(
+        "SELECT content FROM skill_files WHERE campaign_id = $1 AND filename = $2",
+        campaign_id, filename,
+    )
+    return row["content"] if row else None
+
+
+async def get_skill_files_for_loader(
+    pool: asyncpg.Pool, campaign_id: str
+) -> dict[str, str]:
+    """
+    Return all files needed to build a CampaignContext:
+    common/ files first (evidence-extraction.md etc.), then campaign-specific
+    files which take precedence on any name collision.
+    """
+    result: dict[str, str] = {}
+    # Common files (shared across all campaigns)
+    common_rows = await pool.fetch(
+        "SELECT filename, content FROM skill_files WHERE campaign_id = 'common'"
+    )
+    for r in common_rows:
+        result[r["filename"]] = r["content"]
+    # Campaign-specific files (overwrite common if same filename)
+    campaign_rows = await pool.fetch(
+        "SELECT filename, content FROM skill_files WHERE campaign_id = $1",
+        campaign_id,
+    )
+    for r in campaign_rows:
+        result[r["filename"]] = r["content"]
+    return result
+
+
+async def list_skill_campaign_ids(pool: asyncpg.Pool) -> list[str]:
+    """Return all distinct campaign_ids present in skill_files (includes 'common')."""
+    rows = await pool.fetch(
+        "SELECT DISTINCT campaign_id FROM skill_files ORDER BY campaign_id"
+    )
+    return [r["campaign_id"] for r in rows]
+
+
+async def seed_skill_files_from_disk(pool: asyncpg.Pool, skills_root) -> None:
+    """
+    Sync skill_files table with the skills directory on disk.
+
+    Rules:
+    - common/*  : always force-upsert from disk (developer-managed, never edited by operators)
+    - campaigns : INSERT … DO NOTHING (operator edits in DB take priority)
+    - Orphaned campaign_ids in DB (directory deleted from disk) are removed
+    """
+    import logging as _logging
+    from pathlib import Path as _Path
+    _log = _logging.getLogger(__name__)
+    root = _Path(skills_root)
+    editable = {".md", ".json"}
+
+    # 1. Remove DB rows for campaign_ids whose directory no longer exists on disk
+    disk_ids = {d.name for d in root.iterdir() if d.is_dir()}
+    db_ids = set(await list_skill_campaign_ids(pool))
+    orphaned = db_ids - disk_ids
+    for cid in orphaned:
+        await pool.execute("DELETE FROM skill_files WHERE campaign_id = $1", cid)
+        _log.info("skill_files: removed orphaned campaign_id '%s' from DB", cid)
+
+    # 2. Force-upsert common/ files (developer-managed — disk is always source of truth)
+    common_dir = root / "common"
+    if common_dir.is_dir():
+        for f in sorted(common_dir.iterdir()):
+            if f.is_file() and f.suffix in editable and not f.name.startswith("."):
+                await upsert_skill_file(pool, "common", f.name, f.read_text(encoding="utf-8"))
+
+    # 3. INSERT … DO NOTHING for campaign-specific files (DB wins for operator edits)
+    seeded = 0
+    for directory in sorted(root.iterdir()):
+        if not directory.is_dir() or directory.name == "common":
+            continue
+        for f in sorted(directory.iterdir()):
+            if f.is_file() and f.suffix in editable and not f.name.startswith("."):
+                await seed_skill_file(pool, directory.name, f.name, f.read_text(encoding="utf-8"))
+                seeded += 1
+
+    _log.info(
+        "skill_files: synced from disk — %d orphaned removed, common/ force-upserted, %d campaign files seeded",
+        len(orphaned), seeded,
+    )
+
+
+async def ensure_campaign(
+    pool: asyncpg.Pool, campaign_id: str, name: str, description: str = ""
+) -> None:
+    """Insert a campaign registry row if it does not already exist."""
+    await pool.execute(
+        """INSERT INTO campaigns (id, name, description)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (id) DO NOTHING""",
+        campaign_id, name, description,
+    )
+
+
+async def delete_campaign_skill_files(pool: asyncpg.Pool, campaign_id: str) -> None:
+    """Remove all skill files for a campaign (used when deleting a campaign)."""
+    await pool.execute(
+        "DELETE FROM skill_files WHERE campaign_id = $1", campaign_id
+    )
+
+
+async def delete_campaign(pool: asyncpg.Pool, campaign_id: str) -> None:
+    """
+    Fully remove a campaign: skill files, campaign row.
+    Runs that referenced this campaign have their campaign_id set to NULL first
+    to avoid FK violation (run history is preserved, just unlinked).
+    """
+    await pool.execute("DELETE FROM skill_files WHERE campaign_id = $1", campaign_id)
+    await pool.execute("UPDATE runs SET campaign_id = NULL WHERE campaign_id = $1", campaign_id)
+    await pool.execute("DELETE FROM campaign_settings WHERE campaign_id = $1", campaign_id)
+    await pool.execute("DELETE FROM exclusions WHERE campaign_id = $1", campaign_id)
+    await pool.execute("DELETE FROM email_templates WHERE campaign_id = $1", campaign_id)
+    await pool.execute("DELETE FROM campaigns WHERE id = $1", campaign_id)

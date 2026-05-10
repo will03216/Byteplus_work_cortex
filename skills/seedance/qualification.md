@@ -40,3 +40,18 @@ This factor reflects BOTH signal engagement quality AND whether a relevant workf
 - 0–1:  Freelancer, solo operator, nano-company
   Add 1–2 pts if company momentum signal present: hiring AI/video roles, new leadership, funding, expansion.
 
+## Confidence Levels
+
+- **high**: signal is direct (post/comment), ICP segment clear, persona is decision maker
+- **medium**: signal is a like OR persona is an influencer not a decision maker, some unknowns
+- **low**: signal is weak, significant data gaps, inferences outnumber observations
+
+## Output Requirements
+
+- `score` MUST equal the exact sum of all five sub-scores
+- Each sub-score MUST be within its maximum: segment≤30, buyer≤25, pain≤20, workflow≤15, commercial≤10
+- `decision` MUST match the threshold applied to `score`
+- `reasoning_summary`: 2–3 sentences max, factual, reference specific evidence
+- `qualification_reasons` and `disqualification_reasons`: short evidence-based bullets
+- `suggested_use_case`: match to the segment → use case table in seedance/icp.md
+

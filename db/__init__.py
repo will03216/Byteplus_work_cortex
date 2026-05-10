@@ -24,6 +24,16 @@ from .store import (
     add_email_template,
     update_email_template,
     delete_email_template,
+    seed_skill_files_from_disk,
+    seed_skill_file,
+    upsert_skill_file,
+    list_skill_files,
+    get_skill_file,
+    get_skill_files_for_loader,
+    list_skill_campaign_ids,
+    ensure_campaign,
+    delete_campaign_skill_files,
+    delete_campaign,
 )
 
 __all__ = [
@@ -32,8 +42,11 @@ __all__ = [
     "insert_run", "update_run", "upsert_lead",
     "get_leads", "list_runs", "delete_run",
     "update_run_email_status", "mark_leads_email_sent", "get_leads_for_email",
-    "get_leads_for_email", "set_lead_manual_email_status",
+    "set_lead_manual_email_status",
     "get_settings", "save_settings",
     "get_exclusions", "add_exclusion", "remove_exclusion",
     "seed_email_templates", "get_email_templates", "add_email_template", "update_email_template", "delete_email_template",
+    "seed_skill_files_from_disk", "seed_skill_file", "upsert_skill_file",
+    "list_skill_files", "get_skill_file", "get_skill_files_for_loader",
+    "list_skill_campaign_ids", "ensure_campaign", "delete_campaign_skill_files", "delete_campaign",
 ]

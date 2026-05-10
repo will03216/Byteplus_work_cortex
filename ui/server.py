@@ -6,6 +6,7 @@ In Docker:    set DATABASE_URL env var, then docker-compose up
 
 import asyncio
 import csv
+import io
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +37,7 @@ RUNS_DIR   = OUTPUT_DIR / "runs"
 sys.path.insert(0, str(ROOT))
 import db as store
 from campaigns import load_all_campaigns, list_campaign_ids
+from campaigns.registry import reload_campaign_from_strings
 
 logger = logging.getLogger("seedance.ui")
 
@@ -63,6 +66,37 @@ INSTANTLY_SCORE_THRESHOLD = int(os.getenv("INSTANTLY_SCORE_THRESHOLD", "75"))
 PLACEHOLDER_EMAIL         = os.getenv("PLACEHOLDER_EMAIL", "mittulmadaan91@gmail.com")
 
 
+# ── DB-backed campaign reload ─────────────────────────────────────────────────
+
+async def _reload_all_campaigns_from_db() -> None:
+    """Reload every registered campaign's prompt context from skill_files in the DB."""
+    for campaign_id in list_campaign_ids():
+        try:
+            files = await store.get_skill_files_for_loader(_pool, campaign_id)
+            if files:
+                reload_campaign_from_strings(campaign_id, files, SKILLS_ROOT)
+        except Exception as exc:
+            logger.error("Failed to reload campaign '%s' from DB: %s", campaign_id, exc)
+
+
+async def _reload_campaign_from_db(campaign_id: str) -> list[str]:
+    """
+    Reload one campaign (or all if campaign_id is 'common') from the DB.
+    Returns a list of campaign IDs that were successfully reloaded.
+    """
+    reloaded = []
+    targets = list_campaign_ids() if campaign_id == "common" else [campaign_id]
+    for cid in targets:
+        try:
+            files = await store.get_skill_files_for_loader(_pool, cid)
+            if files:
+                reload_campaign_from_strings(cid, files, SKILLS_ROOT)
+                reloaded.append(cid)
+        except Exception as exc:
+            logger.warning("Hot-reload failed for campaign '%s': %s", cid, exc)
+    return reloaded
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -70,11 +104,11 @@ async def lifespan(app: FastAPI):
     global _pool
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Load all campaign contexts from skills/
+    # Load all campaign contexts from disk first (works in no-DB mode too)
     try:
         load_all_campaigns(SKILLS_ROOT)
     except Exception as exc:
-        logger.warning("Campaign loading failed: %s", exc)
+        logger.warning("Campaign loading from disk failed: %s", exc)
 
     if DATABASE_URL:
         try:
@@ -90,6 +124,12 @@ async def lifespan(app: FastAPI):
             _exclusions[:] = await store.get_exclusions(_pool)
             await store.seed_email_templates(_pool)
             _templates[:] = await store.get_email_templates(_pool)
+
+            # Seed skill_files from disk — DO NOTHING on conflict so DB rows always win
+            await store.seed_skill_files_from_disk(_pool, SKILLS_ROOT)
+            # Reload every campaign from DB content (DB is now source of truth)
+            await _reload_all_campaigns_from_db()
+
             logger.info("PostgreSQL connected: %s", DATABASE_URL.split("@")[-1])
         except Exception as exc:
             logger.error("DB connection failed: %s — running without persistence", exc)
@@ -975,6 +1015,269 @@ async def api_delete_template(request: Request, template_id: int):
     return JSONResponse({"ok": True})
 
 
+# ── API: skills management ────────────────────────────────────────────────────
+
+# Files that make up a campaign (order matters for the UI file list)
+_CAMPAIGN_FILES = ["config.json", "product.md", "icp.md", "signals.md", "disqualification.md", "qualification.md"]
+_COMMON_FILES   = ["signal-taxonomy.md", "scoring-framework.md", "evidence-extraction.md"]
+_EDITABLE_EXTS  = {".md", ".json"}
+
+
+def _skill_campaigns() -> list[dict]:
+    """Return all editable skill groups: one entry per campaign + common."""
+    groups = []
+    # common/ is always listed first
+    common_dir = SKILLS_ROOT / "common"
+    if common_dir.exists():
+        groups.append({"id": "common", "name": "Common (shared)", "is_common": True})
+    for cid in sorted(list_campaign_ids()):
+        groups.append({"id": cid, "name": cid.capitalize(), "is_common": False})
+    return groups
+
+
+@app.get("/api/skills/campaigns")
+async def api_skills_campaigns(request: Request):
+    _require_auth(request)
+    if _pool:
+        ids = await store.list_skill_campaign_ids(_pool)
+        groups = []
+        if "common" in ids:
+            groups.append({"id": "common", "name": "Common (shared)", "is_common": True})
+        for cid in sorted(ids):
+            if cid != "common":
+                groups.append({"id": cid, "name": cid.replace("-", " ").capitalize(), "is_common": False})
+        return JSONResponse(groups)
+    return JSONResponse(_skill_campaigns())
+
+
+@app.get("/api/skills/{campaign_id}")
+async def api_skills_list(request: Request, campaign_id: str):
+    """List editable files for a campaign or 'common'."""
+    _require_auth(request)
+    if _pool:
+        files = await store.list_skill_files(_pool, campaign_id)
+        if not files:
+            return JSONResponse({"error": "Campaign not found or has no files"}, status_code=404)
+        return JSONResponse(files)
+    # Disk fallback
+    target_dir = SKILLS_ROOT / campaign_id
+    if not target_dir.exists():
+        return JSONResponse({"error": "Campaign not found"}, status_code=404)
+    files = [
+        {"name": f.name, "size": f.stat().st_size}
+        for f in sorted(target_dir.iterdir())
+        if f.is_file() and f.suffix in _EDITABLE_EXTS and not f.name.startswith(".")
+    ]
+    return JSONResponse(files)
+
+
+@app.get("/api/skills/{campaign_id}/export")
+async def api_skills_export(request: Request, campaign_id: str):
+    """Download all skill files for a campaign as a zip archive."""
+    _require_auth(request)
+
+    if _pool:
+        raw = await store.list_skill_files(_pool, campaign_id)
+        if not raw:
+            return JSONResponse({"error": "Campaign not found or has no files"}, status_code=404)
+        file_contents = {}
+        for row in raw:
+            content = await store.get_skill_file(_pool, campaign_id, row["name"])
+            if content is not None:
+                file_contents[row["name"]] = content
+    else:
+        target_dir = SKILLS_ROOT / campaign_id
+        if not target_dir.exists():
+            return JSONResponse({"error": "Campaign not found"}, status_code=404)
+        file_contents = {
+            f.name: f.read_text(encoding="utf-8")
+            for f in sorted(target_dir.iterdir())
+            if f.is_file() and f.suffix in _EDITABLE_EXTS and not f.name.startswith(".")
+        }
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in file_contents.items():
+            zf.writestr(name, content)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{campaign_id}-skills.zip"'},
+    )
+
+
+@app.get("/api/skills/{campaign_id}/{filename}")
+async def api_skills_read(request: Request, campaign_id: str, filename: str):
+    """Read the content of a single skill file."""
+    _require_auth(request)
+    if ".." in filename or "/" in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    if Path(filename).suffix not in _EDITABLE_EXTS:
+        return JSONResponse({"error": "File type not editable"}, status_code=400)
+
+    if _pool:
+        content = await store.get_skill_file(_pool, campaign_id, filename)
+        if content is None:
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        return JSONResponse({"content": content})
+    # Disk fallback
+    file_path = SKILLS_ROOT / campaign_id / filename
+    if not file_path.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return JSONResponse({"content": file_path.read_text(encoding="utf-8")})
+
+
+@app.put("/api/skills/{campaign_id}/{filename}")
+async def api_skills_write(request: Request, campaign_id: str, filename: str):
+    """Save edited content to a skill file and hot-reload the affected campaign(s)."""
+    _require_auth(request)
+    if ".." in filename or "/" in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    if Path(filename).suffix not in _EDITABLE_EXTS:
+        return JSONResponse({"error": "File type not editable"}, status_code=400)
+
+    body = await request.json()
+    content = body.get("content", "")
+
+    if _pool:
+        # Verify the row exists before saving (prevent creating arbitrary new files)
+        existing = await store.get_skill_file(_pool, campaign_id, filename)
+        if existing is None:
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        await store.upsert_skill_file(_pool, campaign_id, filename, content)
+        logger.info("Skill file saved to DB: %s/%s (%d bytes)", campaign_id, filename, len(content))
+        reloaded = await _reload_campaign_from_db(campaign_id)
+        return JSONResponse({"ok": True, "reloaded": reloaded})
+
+    # Disk fallback
+    from campaigns.registry import reload_campaign
+    file_path = SKILLS_ROOT / campaign_id / filename
+    if not file_path.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    file_path.write_text(content, encoding="utf-8")
+    logger.info("Skill file saved to disk: %s/%s (%d bytes)", campaign_id, filename, len(content))
+    reloaded = []
+    targets = list_campaign_ids() if campaign_id == "common" else [campaign_id]
+    for cid in targets:
+        try:
+            reload_campaign(cid, SKILLS_ROOT)
+            reloaded.append(cid)
+        except Exception as exc:
+            logger.warning("Hot-reload failed for '%s': %s", cid, exc)
+    return JSONResponse({"ok": True, "reloaded": reloaded})
+
+
+@app.post("/api/skills")
+async def api_skills_create(request: Request, file: UploadFile = File(...), name: str = Form(...)):
+    """
+    Create a new campaign from a zip upload.
+    All 6 files are required: config.json, product.md, icp.md,
+    signals.md, disqualification.md, qualification.md.
+    campaign_id is derived from name: lowercased, spaces → hyphens.
+    """
+    _require_auth(request)
+    import zipfile
+    import io as _io
+
+    campaign_id = name.strip().lower().replace(" ", "-")
+    if not campaign_id or ".." in campaign_id or "/" in campaign_id:
+        return JSONResponse({"error": "Invalid campaign name"}, status_code=400)
+
+    # Conflict check: DB or disk
+    if _pool:
+        existing = await store.list_skill_files(_pool, campaign_id)
+        if existing:
+            return JSONResponse({"error": f"Campaign '{campaign_id}' already exists"}, status_code=409)
+    elif (SKILLS_ROOT / campaign_id).exists():
+        return JSONResponse({"error": f"Campaign '{campaign_id}' already exists"}, status_code=409)
+
+    zip_bytes = await file.read()
+    try:
+        zf = zipfile.ZipFile(_io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile:
+        return JSONResponse({"error": "Uploaded file is not a valid zip"}, status_code=400)
+
+    entries = [n for n in zf.namelist() if not n.endswith("/") and not n.startswith("__MACOSX")]
+    if not entries:
+        return JSONResponse({"error": "Zip is empty"}, status_code=400)
+
+    # Strip common top-level directory if all files share one
+    parts = [e.split("/") for e in entries]
+    prefix = parts[0][0] if all(p[0] == parts[0][0] for p in parts) and len(parts[0]) > 1 else ""
+
+    def _strip(n: str) -> str:
+        return n[len(prefix) + 1:] if prefix and n.startswith(prefix + "/") else n
+
+    files_in_zip = {_strip(e): e for e in entries}
+
+    required = {"config.json", "product.md", "icp.md", "signals.md", "disqualification.md", "qualification.md"}
+    missing = required - files_in_zip.keys()
+    if missing:
+        return JSONResponse({"error": f"Zip missing required files: {', '.join(sorted(missing))}"}, status_code=400)
+
+    # Extract content for editable files
+    files_content: dict[str, str] = {}
+    for local_name, zip_entry in files_in_zip.items():
+        if Path(local_name).suffix in _EDITABLE_EXTS:
+            files_content[local_name] = zf.read(zip_entry).decode("utf-8")
+
+    written = list(files_content.keys())
+
+    if _pool:
+        # DB path: persist campaign row + all skill files, reload from DB
+        await store.ensure_campaign(_pool, campaign_id, name.strip())
+        for fname, fcontent in files_content.items():
+            await store.upsert_skill_file(_pool, campaign_id, fname, fcontent)
+        files_for_loader = await store.get_skill_files_for_loader(_pool, campaign_id)
+        try:
+            reload_campaign_from_strings(campaign_id, files_for_loader, SKILLS_ROOT)
+        except Exception as exc:
+            logger.warning("Campaign '%s' saved to DB but failed to load: %s", campaign_id, exc)
+            return JSONResponse({"ok": True, "campaign_id": campaign_id, "files": written, "load_warning": str(exc)})
+    else:
+        # Disk fallback
+        from campaigns.registry import reload_campaign
+        campaign_dir = SKILLS_ROOT / campaign_id
+        campaign_dir.mkdir(parents=True)
+        for fname, fcontent in files_content.items():
+            (campaign_dir / fname).write_text(fcontent, encoding="utf-8")
+        try:
+            reload_campaign(campaign_id, SKILLS_ROOT)
+        except Exception as exc:
+            logger.warning("Campaign '%s' created on disk but failed to load: %s", campaign_id, exc)
+            return JSONResponse({"ok": True, "campaign_id": campaign_id, "files": written, "load_warning": str(exc)})
+
+    logger.info("New campaign created: %s (files: %s)", campaign_id, ", ".join(written))
+    return JSONResponse({"ok": True, "campaign_id": campaign_id, "files": written})
+
+
+@app.delete("/api/skills/{campaign_id}")
+async def api_skills_delete(request: Request, campaign_id: str):
+    """Delete a campaign and remove it from the registry. seedance and common are protected."""
+    _require_auth(request)
+    if campaign_id in ("common", "seedance", "kling"):
+        return JSONResponse({"error": f"Campaign '{campaign_id}' cannot be deleted"}, status_code=400)
+
+    from campaigns.registry import remove_campaign
+
+    if _pool:
+        existing = await store.list_skill_files(_pool, campaign_id)
+        if not existing:
+            return JSONResponse({"error": "Campaign not found"}, status_code=404)
+        await store.delete_campaign(_pool, campaign_id)
+    else:
+        campaign_dir = SKILLS_ROOT / campaign_id
+        if not campaign_dir.exists():
+            return JSONResponse({"error": "Campaign not found"}, status_code=404)
+        shutil.rmtree(campaign_dir)
+
+    remove_campaign(campaign_id)
+    logger.info("Campaign deleted: %s", campaign_id)
+    return JSONResponse({"ok": True})
+
+
 # ── HTML ──────────────────────────────────────────────────────────────────────
 
 # ── HTML templates ────────────────────────────────────────────────────────────
@@ -990,6 +1293,14 @@ HTML = (TEMPLATES_DIR / "app.html").read_text(encoding="utf-8")
 
 @app.get("/")
 async def index(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse(HTML)
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(request: Request, full_path: str):
+    """Serve the app shell for all client-side routes so refresh works."""
     if not _is_authenticated(request):
         return RedirectResponse("/login", status_code=303)
     return HTMLResponse(HTML)

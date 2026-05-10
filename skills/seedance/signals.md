@@ -1,20 +1,22 @@
-## Signal Engagement Hierarchy
-Antti's stated priority order:
-- POST (they published content) → HIGH signal
-- COMMENT (they engaged in depth) → MEDIUM signal
-- LIKE / REACTION → MEDIUM-LOW signal (NOT low — still actionable for right ICP)
+## Seedance Signal Interpretation
 
-A like from a film producer or creative director is medium-low, not low.
+Base signal hierarchy (POST → COMMENT → LIKE), company momentum signals, and the new executive signal are defined in common/signal-taxonomy.md.
+
+## Seedance-Specific Signal Notes
+
+A like from a film producer or creative director on Seedance content is medium-low — NOT low.
 A like on highly relevant Seedance content (direct model comparison, production workflow demo, ad-creative example, or clearly video-generation-specific post) from a strong-fit company/persona is stronger than a generic like.
-Only assign "low" when BOTH are true: wrong ICP segment AND wrong persona.
 
-## Company Momentum Signals to Look For
-Flag these in observed_evidence if present:
-- Company hiring for AI/video/creative roles → strong positive signal
-- New CEO, CMO, or Head of Production recently appointed → strong signal (new leaders make change)
-- Recent funding round → context signal (budget available)
-- Strategic expansion or product launch → growth signal
+## Seedance-Specific Buying Signals
 
-## New Executive Signal (High Priority)
-If the person recently started their role (< 12 months), flag this explicitly in observed_evidence.
-New executives are under pressure to deliver and actively seek change — this is a strong buying signal.
+High-intent:
+- Posting about production bottlenecks, scaling video output, or replacing manual editing steps
+- Comparing AI video tools for a production or ad-creative workflow
+- Requesting API access or developer-level engagement with video generation
+- Explicit mention of Seedance, ByteDance video, or Seedance Omni
+
+Medium-intent:
+- Commenting on Seedance model comparisons or production workflow demos
+- Posts about AI adoption in a video, content, or short drama workflow
+- Broadcast or short drama company exploring AI content acceleration
+- Hiring for AI-integrated production or creative roles

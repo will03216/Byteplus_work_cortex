@@ -57,6 +57,36 @@ def get_campaign(campaign_id: str) -> CampaignContext:
     return _campaigns[campaign_id]
 
 
+def reload_campaign(campaign_id: str, skills_root: Path) -> CampaignContext:
+    """Reload a single campaign from disk. Used in no-DB (local dev) mode."""
+    loader = CampaignLoader(skills_root)
+    ctx = loader.load(campaign_id)
+    _campaigns[campaign_id] = ctx
+    logger.info("Reloaded campaign '%s' from disk", campaign_id)
+    return ctx
+
+
+def reload_campaign_from_strings(
+    campaign_id: str, files: dict[str, str], skills_root: Path
+) -> CampaignContext:
+    """
+    Rebuild a campaign context from a dict of {filename: content} and update
+    the registry in-place. Used when PostgreSQL is the source of truth.
+    files must include both campaign-specific files and any common files
+    (evidence-extraction.md) already merged in by the caller.
+    """
+    loader = CampaignLoader(skills_root)
+    ctx = loader.load_from_strings(campaign_id, files)
+    _campaigns[campaign_id] = ctx
+    logger.info("Reloaded campaign '%s' from DB content", campaign_id)
+    return ctx
+
+
+def remove_campaign(campaign_id: str) -> None:
+    """Remove a campaign from the registry (used when a campaign directory is deleted)."""
+    _campaigns.pop(campaign_id, None)
+
+
 def list_campaign_ids() -> list[str]:
     return list(_campaigns.keys())
 

@@ -35,6 +35,8 @@ You MUST return ONLY a single valid JSON object. No explanation, no markdown, no
 
 {signals_section}
 
+{disqualification_rules_section}
+
 {disqualification_section}
 
 {evidence_rules_section}
@@ -104,20 +106,39 @@ class CampaignLoader:
         self._common_dir = skills_root / "common"
 
     def load(self, campaign_id: str) -> CampaignContext:
+        """Load a campaign from disk files. Used for local dev and initial DB seeding."""
         campaign_dir = self.skills_root / campaign_id
         if not campaign_dir.exists():
             raise FileNotFoundError(f"Campaign skills directory not found: {campaign_dir}")
 
-        cfg = self._load_config(campaign_dir)
+        files = {
+            "config.json":              self._read(campaign_dir / "config.json"),
+            "icp.md":                   self._read(campaign_dir / "icp.md"),
+            "signals.md":               self._read(campaign_dir / "signals.md"),
+            "disqualification.md":      self._read(campaign_dir / "disqualification.md"),
+            "qualification.md":         self._read(campaign_dir / "qualification.md"),
+            "evidence-extraction.md":   self._read(self._common_dir / "evidence-extraction.md"),
+            "disqualification-rules.md": self._read(self._common_dir / "disqualification-rules.md"),
+        }
+        return self.load_from_strings(campaign_id, files)
+
+    def load_from_strings(self, campaign_id: str, files: dict[str, str]) -> CampaignContext:
+        """
+        Build a CampaignContext from a dict of {filename: content}.
+        Used when PostgreSQL is the source of truth for skill files.
+        The dict should contain campaign-specific files plus any common files
+        (e.g. evidence-extraction.md) already merged in by the caller.
+        """
+        cfg: dict = {}
+        raw_config = files.get("config.json", "")
+        if raw_config:
+            try:
+                cfg = json.loads(raw_config)
+            except json.JSONDecodeError:
+                logger.warning("Invalid config.json for campaign '%s' — using defaults", campaign_id)
+
         name = cfg.get("name", campaign_id.capitalize())
         tagline = cfg.get("tagline", "AI video generation platform")
-
-        icp_content = self._read(campaign_dir / "icp.md")
-        signals_content = self._read(campaign_dir / "signals.md")
-        disqualification_content = self._read(campaign_dir / "disqualification.md")
-        qualification_content = self._read(campaign_dir / "qualification.md")
-        evidence_rules = self._read(self._common_dir / "evidence-extraction.md")
-
         weights = cfg.get("score_weights", app_config.SCORE_WEIGHTS.copy())
         qualified_threshold = int(cfg.get("qualified_threshold", app_config.QUALIFIED_THRESHOLD))
         disqualified_threshold = int(cfg.get("disqualified_threshold", app_config.DISQUALIFIED_THRESHOLD))
@@ -125,16 +146,17 @@ class CampaignLoader:
         stage1_prompt = _STAGE1_TEMPLATE.format(
             product_name=name,
             product_tagline=tagline,
-            icp_section=icp_content.strip(),
-            signals_section=signals_content.strip(),
-            disqualification_section=disqualification_content.strip(),
-            evidence_rules_section=evidence_rules.strip(),
+            icp_section=files.get("icp.md", "").strip(),
+            signals_section=files.get("signals.md", "").strip(),
+            disqualification_rules_section=files.get("disqualification-rules.md", "").strip(),
+            disqualification_section=files.get("disqualification.md", "").strip(),
+            evidence_rules_section=files.get("evidence-extraction.md", "").strip(),
         )
 
         stage2_prompt = _STAGE2_TEMPLATE.format(
             product_name=name,
             product_tagline=tagline,
-            qualification_section=qualification_content.strip(),
+            qualification_section=files.get("qualification.md", "").strip(),
             qualified_threshold=qualified_threshold,
             disqualified_threshold=disqualified_threshold,
             w_segment=weights.get("segment_fit", 30),
@@ -158,14 +180,6 @@ class CampaignLoader:
             qualified_threshold=qualified_threshold,
             disqualified_threshold=disqualified_threshold,
         )
-
-    def _load_config(self, campaign_dir: Path) -> dict:
-        config_path = campaign_dir / "config.json"
-        if not config_path.exists():
-            logger.warning("No config.json in %s — using defaults", campaign_dir)
-            return {}
-        with open(config_path, encoding="utf-8") as f:
-            return json.load(f)
 
     def _read(self, path: Path) -> str:
         if not path.exists():
