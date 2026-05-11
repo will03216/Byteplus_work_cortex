@@ -49,6 +49,29 @@ class EnrichedLead(BaseModel):
 
 # ── Apollo response parsers ───────────────────────────────────────────────────
 
+def _coerce_int(value) -> Optional[int]:
+    """Best-effort numeric coercion for Apollo fields that may arrive as strings."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip().replace(",", "")
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned)
+        except ValueError:
+            try:
+                return int(float(cleaned))
+            except ValueError:
+                return None
+    return None
+
 def _employee_range(count: Optional[int]) -> Optional[str]:
     if not count:
         return None
@@ -64,14 +87,15 @@ def _parse_company_profile(data: dict) -> CompanyProfile:
     if not data:
         return CompanyProfile()
 
-    headcount = data.get("employee_count") or data.get("estimated_num_employees")
+    headcount = _coerce_int(data.get("employee_count") or data.get("estimated_num_employees"))
+    total_funding = _coerce_int(data.get("total_funding"))
 
     return CompanyProfile(
         description       = data.get("short_description") or data.get("long_description") or None,
         industry          = data.get("industry") or None,
         company_size      = _employee_range(headcount),
         funding_stage     = data.get("latest_funding_round_type") or None,
-        total_funding_usd = data.get("total_funding") or None,
+        total_funding_usd = total_funding,
     )
 
 
@@ -86,7 +110,7 @@ def _parse_recent_signals(data: dict) -> RecentSignals:
     for ev in (data.get("funding_events") or [])[:3]:
         parts = []
         round_type = ev.get("type") or ""
-        amount     = ev.get("amount")
+        amount     = _coerce_int(ev.get("amount"))
         date       = (ev.get("date") or "")[:7]   # YYYY-MM
         if round_type:
             parts.append(round_type)

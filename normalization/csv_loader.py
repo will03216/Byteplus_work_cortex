@@ -11,6 +11,7 @@ does not contain a raw signal text column.
 """
 
 import csv
+import io
 import re
 import logging
 from datetime import datetime, timezone
@@ -78,6 +79,20 @@ def _build_signal_text(row: dict) -> str:
     return " ".join(parts)
 
 
+def _decode_csv_text(file_path: str) -> tuple[str, str]:
+    """
+    Decode CSV bytes with a UTF-8-first strategy, then fall back to common
+    spreadsheet/export encodings instead of failing the entire run.
+    """
+    raw_bytes = open(file_path, "rb").read()
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw_bytes.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    raise UnicodeDecodeError("utf-8", raw_bytes, 0, 1, "unable to decode CSV with supported encodings")
+
+
 def load_csv(file_path: str) -> list[dict]:
     """
     Read a Trigify CSV export and return a list of dicts in LeadInput format.
@@ -86,33 +101,33 @@ def load_csv(file_path: str) -> list[dict]:
     """
     leads = []
     run_timestamp = datetime.now(timezone.utc).isoformat()
+    csv_text, encoding = _decode_csv_text(file_path)
 
-    with open(file_path, encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for index, row in enumerate(reader, start=1):
-            name    = row.get("NAME", "").strip()
-            company = row.get("COMPANY", "").strip()
+    reader = csv.DictReader(io.StringIO(csv_text, newline=""))
+    for index, row in enumerate(reader, start=1):
+        name    = row.get("NAME", "").strip()
+        company = row.get("COMPANY", "").strip()
 
-            if not name or not company:
-                logger.warning("Row %d: missing NAME or COMPANY — skipping", index)
-                continue
+        if not name or not company:
+            logger.warning("Row %d: missing NAME or COMPANY — skipping", index)
+            continue
 
-            interaction = row.get("INTERACTION", "").strip().lower()
-            signal_type = _INTERACTION_TYPE_MAP.get(interaction, "linkedin_engagement")
+        interaction = row.get("INTERACTION", "").strip().lower()
+        signal_type = _INTERACTION_TYPE_MAP.get(interaction, "linkedin_engagement")
 
-            lead = {
-                "lead_id":          _make_lead_id(name, company, index),
-                "person_name":      name,
-                "title":            row.get("JOB TITLE", "").strip(),
-                "company_name":     company,
-                "company_domain":   row.get("COMPANY URL", "").strip(),
-                "company_size":     row.get("COMPANY SIZE", "").strip() or None,
-                "linkedin_url":     row.get("LINKEDIN PROFILE", "").strip() or None,
-                "signal_text":      _build_signal_text(row),
-                "signal_type":      signal_type,
-                "signal_timestamp": run_timestamp,
-            }
-            leads.append(lead)
+        lead = {
+            "lead_id":          _make_lead_id(name, company, index),
+            "person_name":      name,
+            "title":            row.get("JOB TITLE", "").strip(),
+            "company_name":     company,
+            "company_domain":   row.get("COMPANY URL", "").strip(),
+            "company_size":     row.get("COMPANY SIZE", "").strip() or None,
+            "linkedin_url":     row.get("LINKEDIN PROFILE", "").strip() or None,
+            "signal_text":      _build_signal_text(row),
+            "signal_type":      signal_type,
+            "signal_timestamp": run_timestamp,
+        }
+        leads.append(lead)
 
-    logger.info("CSV loader: read %d leads from %s", len(leads), file_path)
+    logger.info("CSV loader: read %d leads from %s using %s", len(leads), file_path, encoding)
     return leads
