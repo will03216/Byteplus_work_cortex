@@ -36,8 +36,14 @@ RUNS_DIR   = OUTPUT_DIR / "runs"
 
 sys.path.insert(0, str(ROOT))
 import db as store
-from campaigns import load_all_campaigns, list_campaign_ids
+import config
+from campaigns import get_campaign, load_all_campaigns, list_campaign_ids
 from campaigns.registry import reload_campaign_from_strings
+from claude import extract_evidence, make_decision
+from llm import LiteLLMClient
+from normalization import normalize_lead
+from router import route_decision
+from tools import enrich_lead
 
 logger = logging.getLogger("seedance.ui")
 
@@ -227,15 +233,18 @@ def _read_run_files(run_dir: Path) -> list:
         with open(path, encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 lid = row.get("lead_id", "")
-                art, ev = {}, {}
+                art, ev, enrichment = {}, {}, {}
                 input_payload = {}
                 art_p = run_dir / "artifacts" / f"{lid}_decision.json"
                 ev_p  = run_dir / "artifacts" / f"{lid}_evidence.json"
+                enrichment_p = run_dir / "artifacts" / f"{lid}_enrichment.json"
                 input_p = run_dir / "artifacts" / f"{lid}_input.json"
                 if art_p.exists():
                     art = json.loads(art_p.read_text())
                 if ev_p.exists():
                     ev = json.loads(ev_p.read_text())
+                if enrichment_p.exists():
+                    enrichment = json.loads(enrichment_p.read_text())
                 if input_p.exists():
                     input_payload = json.loads(input_p.read_text())
                 leads.append({
@@ -266,6 +275,10 @@ def _read_run_files(run_dir: Path) -> list:
                     "unknowns":       ev.get("unknowns", []),
                     "hard_disqualifiers": ev.get("hard_disqualifiers", []),
                     "reasoning":      art.get("reasoning_summary") or row.get("reasoning_summary", ""),
+                    "raw_input":      input_payload,
+                    "enrichment_snapshot": enrichment,
+                    "evidence_snapshot": ev,
+                    "decision_snapshot": art,
                 })
     leads.sort(key=lambda x: x["score"], reverse=True)
     return leads
@@ -287,6 +300,147 @@ def _summarize_run_dir(run_dir: Path) -> dict:
         "n_disqualified": counts["disqualified"],
         "created_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
     }
+
+
+def _require_db():
+    if not _pool:
+        raise HTTPException(status_code=400, detail="Database required")
+
+
+def _memory_history_summary(memories: list[dict]) -> dict:
+    counts = {"qualified": 0, "review": 0, "disqualified": 0}
+    for memory in memories:
+        routing = memory.get("routing")
+        if routing in counts:
+            counts[routing] += 1
+    return {
+        "times_seen": len(memories),
+        "qualified_count": counts["qualified"],
+        "review_count": counts["review"],
+        "disqualified_count": counts["disqualified"],
+        "last_score": (memories[0].get("decision_snapshot", {}) or {}).get("score") if memories else None,
+    }
+
+
+def _make_profile_signal_text(company_name: str, person_name: str, title: str) -> str:
+    company = (company_name or "Unknown company").strip()
+    person = (person_name or "Unknown person").strip()
+    role = (title or "unknown role").strip()
+    return f"Profile request for {person} ({role}) at {company}. Determine fit based on available company and persona context."
+
+
+def _make_profile_lead_payload(body: dict) -> dict:
+    company_name = (body.get("company_name") or body.get("company") or "").strip()
+    person_name = (body.get("person_name") or body.get("name") or "").strip()
+    title = (body.get("title") or body.get("role") or "Unknown").strip()
+    company_domain = (body.get("domain") or body.get("company_domain") or "").strip()
+    linkedin_url = (body.get("linkedin_url") or "").strip() or None
+    signal_text = (body.get("signal_text") or "").strip()
+    if not signal_text:
+        signal_text = _make_profile_signal_text(company_name, person_name, title)
+    return {
+        "lead_id": str(uuid.uuid4()),
+        "person_name": person_name or "Unknown Person",
+        "title": title or "Unknown",
+        "company_name": company_name or "Unknown Company",
+        "company_domain": company_domain,
+        "company_size": (body.get("company_size") or "").strip() or None,
+        "linkedin_url": linkedin_url,
+        "signal_text": signal_text,
+        "signal_type": (body.get("signal_type") or "profile_request").strip(),
+        "signal_timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+def _fit_response(decision, evidence, routing: str, memory_used: list[str], history: list[dict]) -> dict:
+    return {
+        "verdict": routing,
+        "confidence": decision.confidence,
+        "score": decision.score,
+        "signal_strength": evidence.signal_strength,
+        "segment": evidence.segment,
+        "why_for": decision.qualification_reasons,
+        "why_against": decision.disqualification_reasons,
+        "reasoning_summary": decision.reasoning_summary,
+        "suggested_use_case": decision.suggested_use_case,
+        "memory_used": memory_used,
+        "history_summary": _memory_history_summary(history),
+    }
+
+
+async def _get_effective_versions(campaign_id: str) -> tuple[str, str]:
+    if not _pool:
+        return "v1", "v1"
+    active_campaign = await store.get_active_campaign_version(_pool, campaign_id)
+    active_policy = await store.get_active_policy_version(_pool, campaign_id)
+    return (
+        active_campaign["version"] if active_campaign else "v1",
+        active_policy["policy_version"] if active_policy else "v1",
+    )
+
+
+def _safe_json_object(text: str, fallback: Optional[dict] = None) -> dict:
+    fallback = fallback or {}
+    raw = (text or "").strip()
+    if not raw:
+        return dict(fallback)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return dict(fallback)
+    return value if isinstance(value, dict) else dict(fallback)
+
+
+async def _sync_seedance_threshold_cache(campaign_id: str, qt: int, dt: int) -> None:
+    if campaign_id == "seedance":
+        _settings["qualified_threshold"] = qt
+        _settings["disqualified_threshold"] = dt
+
+
+async def _apply_campaign_version_runtime(version_row: dict) -> None:
+    campaign_id = version_row["campaign_id"]
+    file_map = {
+        "config.json": version_row.get("config_json", ""),
+        "product.md": version_row.get("product_md", ""),
+        "icp.md": version_row.get("icp_md", ""),
+        "signals.md": version_row.get("signals_md", ""),
+        "disqualification.md": version_row.get("disqualification_md", ""),
+        "qualification.md": version_row.get("qualification_md", ""),
+    }
+    for filename, content in file_map.items():
+        await store.upsert_skill_file(_pool, campaign_id, filename, content)
+
+    cfg = _safe_json_object(version_row.get("config_json", ""))
+    qt = int(cfg.get("qualified_threshold", 70))
+    dt = int(cfg.get("disqualified_threshold", 60))
+    await store.save_settings(_pool, {
+        "qualified_threshold": str(qt),
+        "disqualified_threshold": str(dt),
+    }, campaign_id=campaign_id)
+    await _sync_seedance_threshold_cache(campaign_id, qt, dt)
+    await _reload_campaign_from_db(campaign_id)
+
+
+async def _apply_policy_version_runtime(campaign_id: str, policy_row: dict) -> dict:
+    current_config = await store.get_skill_file(_pool, campaign_id, "config.json") or "{}"
+    cfg = _safe_json_object(current_config)
+    cfg["score_weights"] = policy_row.get("score_weights") or cfg.get("score_weights", {})
+    cfg["qualified_threshold"] = int(policy_row["qualified_threshold"])
+    cfg["disqualified_threshold"] = int(policy_row["disqualified_threshold"])
+    updated_config = json.dumps(cfg, indent=2, ensure_ascii=False)
+
+    await store.upsert_skill_file(_pool, campaign_id, "config.json", updated_config)
+    await store.save_settings(_pool, {
+        "qualified_threshold": str(policy_row["qualified_threshold"]),
+        "disqualified_threshold": str(policy_row["disqualified_threshold"]),
+    }, campaign_id=campaign_id)
+    await _sync_seedance_threshold_cache(
+        campaign_id,
+        int(policy_row["qualified_threshold"]),
+        int(policy_row["disqualified_threshold"]),
+    )
+    await _reload_campaign_from_db(campaign_id)
+    return cfg
 
 
 # ── Email helpers ─────────────────────────────────────────────────────────────
@@ -406,7 +560,11 @@ async def run_pipeline(request: Request, file: UploadFile = File(...), concurren
 
     # Persist run record with campaign_id
     if _pool:
-        await store.insert_run(_pool, run_id, file.filename or "upload.csv", concurrency, campaign_id=campaign)
+        campaign_version, policy_version = await _get_effective_versions(campaign)
+        await store.insert_run(
+            _pool, run_id, file.filename or "upload.csv", concurrency,
+            campaign_id=campaign, campaign_version=campaign_version, policy_version=policy_version,
+        )
 
     _jobs[run_id] = {"lines": [], "status": "running", "returncode": None, "campaign_id": campaign}
     asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency, campaign_id=campaign))
@@ -436,7 +594,11 @@ async def run_pipeline_campaign(request: Request, campaign_id: str,
     run_dir.mkdir(parents=True, exist_ok=True)
 
     if _pool:
-        await store.insert_run(_pool, run_id, file.filename or "upload.csv", concurrency, campaign_id=campaign_id)
+        campaign_version, policy_version = await _get_effective_versions(campaign_id)
+        await store.insert_run(
+            _pool, run_id, file.filename or "upload.csv", concurrency,
+            campaign_id=campaign_id, campaign_version=campaign_version, policy_version=policy_version,
+        )
 
     _jobs[run_id] = {"lines": [], "status": "running", "returncode": None, "campaign_id": campaign_id}
     asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency, campaign_id=campaign_id))
@@ -469,7 +631,7 @@ async def _run_job(run_id: str, csv_path: str, run_dir: Path, concurrency: int, 
 
         # Import results into PostgreSQL, then clean up temp files
         if _pool:
-            await _import_to_db(run_id, run_dir, rc)
+            await _import_to_db(run_id, run_dir, rc, campaign_id=campaign_id)
         # Remove temp run directory — data is now in DB (or kept if no DB)
         if _pool and run_dir.exists():
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -487,10 +649,56 @@ async def _run_job(run_id: str, csv_path: str, run_dir: Path, concurrency: int, 
             pass
 
 
-async def _import_to_db(run_id: str, run_dir: Path, returncode: int):
+async def _import_to_db(run_id: str, run_dir: Path, returncode: int, campaign_id: str = "seedance"):
     leads = _read_run_files(run_dir)
     for lead in leads:
         await store.upsert_lead(_pool, run_id, lead)
+        fit_summary = {
+            "decision": lead.get("decision"),
+            "score": lead.get("score", 0),
+            "confidence": lead.get("conf", ""),
+            "signal_strength": lead.get("signal_strength", ""),
+        }
+        company_profile = await store.upsert_company_profile(
+            _pool,
+            lead.get("company", ""),
+            lead.get("company_website", ""),
+            structured_profile={
+                "company_size": lead.get("company_size", ""),
+                "industry": lead.get("industry", ""),
+                "company_website": lead.get("company_website", ""),
+            },
+            summary=lead.get("reasoning", ""),
+            campaign_id=campaign_id,
+            fit_summary=fit_summary,
+            run_id=run_id,
+        )
+        person_profile = await store.upsert_person_profile(
+            _pool,
+            lead.get("name", ""),
+            linkedin_url=lead.get("linkedin_url", ""),
+            company_profile_id=company_profile["id"] if company_profile else None,
+            title=lead.get("role", ""),
+            summary=lead.get("reasoning", ""),
+            campaign_id=campaign_id,
+            fit_summary=fit_summary,
+            run_id=run_id,
+        )
+        await store.insert_lead_memory(
+            _pool,
+            run_id=run_id,
+            lead_id=lead.get("lead_id", ""),
+            campaign_id=campaign_id,
+            routing=lead.get("decision", "review"),
+            campaign_version="v1",
+            policy_version="v1",
+            company_profile_id=company_profile["id"] if company_profile else None,
+            person_profile_id=person_profile["id"] if person_profile else None,
+            raw_input=lead.get("raw_input", {}),
+            enrichment_snapshot=lead.get("enrichment_snapshot", {}),
+            evidence_snapshot=lead.get("evidence_snapshot", {}),
+            decision_snapshot=lead.get("decision_snapshot", {}),
+        )
     await store.update_run(
         _pool, run_id,
         status="done" if returncode == 0 else "error",
@@ -534,6 +742,403 @@ async def get_results(request: Request, run_id: str):
     else:
         return JSONResponse([], status_code=404)
     return JSONResponse(_mark_exclusions(_apply_thresholds(leads)))
+
+
+# ── API: agent memory and profiling ───────────────────────────────────────────
+
+@app.get("/api/agent/runs/{run_id}")
+async def api_agent_get_run(request: Request, run_id: str):
+    _require_auth(request)
+    _require_db()
+    run = await store.get_run(_pool, run_id)
+    if run is None:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+    return JSONResponse(run)
+
+
+@app.get("/api/agent/runs/{run_id}/results")
+async def api_agent_get_run_results(
+    request: Request,
+    run_id: str,
+    decision: str = "",
+    min_score: int = 0,
+    max_score: int = 100,
+    limit: int = 100,
+    offset: int = 0,
+):
+    _require_auth(request)
+    _require_db()
+    run = await store.get_run(_pool, run_id)
+    if run is None:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    leads = await store.get_leads(_pool, run_id)
+    leads = _mark_exclusions(_apply_thresholds(leads))
+    if decision:
+        leads = [l for l in leads if l.get("decision") == decision]
+    leads = [
+        l for l in leads
+        if min_score <= int(l.get("score", 0)) <= max_score
+    ]
+    start = max(0, offset)
+    end = start + max(1, min(limit, 500))
+    return JSONResponse({
+        "run": run,
+        "count": len(leads),
+        "results": leads[start:end],
+    })
+
+
+@app.get("/api/agent/runs/{run_id}/artifacts/{lead_id}")
+async def api_agent_get_run_artifacts(request: Request, run_id: str, lead_id: str):
+    _require_auth(request)
+    _require_db()
+    run = await store.get_run(_pool, run_id)
+    if run is None:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    artifact = await store.get_lead_memory_item(_pool, run_id, lead_id)
+    if artifact is None:
+        return JSONResponse({"error": "Lead artifacts not found"}, status_code=404)
+    return JSONResponse({
+        "run": run,
+        "artifact": artifact,
+    })
+
+
+@app.post("/api/agent/profile/company")
+async def api_agent_profile_company(request: Request):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    campaign_id = (body.get("campaign_id") or "seedance").strip()
+    company_name = (body.get("company_name") or "").strip()
+    domain = (body.get("domain") or "").strip()
+    refresh_enrichment = bool(body.get("refresh_enrichment", False))
+
+    profile = None
+    if domain:
+        profile = await store.get_company_profile_by_domain(_pool, domain)
+    if profile is None and company_name:
+        matches = await store.search_company_profiles(_pool, company_name, limit=1)
+        profile = matches[0] if matches else None
+    if profile is None and (company_name or domain):
+        profile = await store.upsert_company_profile(
+            _pool,
+            company_name or domain,
+            domain,
+            summary="",
+            campaign_id=campaign_id,
+            fit_summary={},
+        )
+
+    if profile is None:
+        return JSONResponse({"error": "company_name or domain is required"}, status_code=400)
+
+    history = await store.get_lead_memory_for_company(_pool, profile["id"], campaign_id=campaign_id)
+    return JSONResponse({
+        "company_profile": profile,
+        "history": _memory_history_summary(history),
+        "fit_summary": {
+            "campaign_id": campaign_id,
+            "last_known_fit": history[0]["routing"] if history else None,
+            "last_score": (history[0].get("decision_snapshot", {}) or {}).get("score") if history else None,
+        },
+        "refresh_enrichment_requested": refresh_enrichment,
+    })
+
+
+@app.post("/api/agent/profile/person")
+async def api_agent_profile_person(request: Request):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    campaign_id = (body.get("campaign_id") or "seedance").strip()
+    person_name = (body.get("person_name") or "").strip()
+    linkedin_url = (body.get("linkedin_url") or "").strip()
+    company_domain = (body.get("company_domain") or "").strip()
+
+    company_profile = None
+    if company_domain:
+        company_profile = await store.get_company_profile_by_domain(_pool, company_domain)
+
+    profile = await store.get_person_profile(
+        _pool,
+        person_name=person_name,
+        linkedin_url=linkedin_url,
+        company_profile_id=company_profile["id"] if company_profile else None,
+    )
+    if profile is None and (person_name or linkedin_url):
+        profile = await store.upsert_person_profile(
+            _pool,
+            person_name or linkedin_url,
+            linkedin_url=linkedin_url,
+            company_profile_id=company_profile["id"] if company_profile else None,
+            campaign_id=campaign_id,
+            fit_summary={},
+        )
+
+    if profile is None:
+        return JSONResponse({"error": "person_name or linkedin_url is required"}, status_code=400)
+
+    history = await store.get_lead_memory_for_person(_pool, profile["id"], campaign_id=campaign_id)
+    return JSONResponse({
+        "person_profile": profile,
+        "history": _memory_history_summary(history),
+        "fit_summary": {
+            "campaign_id": campaign_id,
+            "last_known_fit": history[0]["routing"] if history else None,
+            "last_score": (history[0].get("decision_snapshot", {}) or {}).get("score") if history else None,
+        },
+    })
+
+
+@app.post("/api/agent/profile/fit")
+async def api_agent_profile_fit(request: Request):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    campaign_id = (body.get("campaign_id") or "seedance").strip()
+    use_memory = bool(body.get("use_memory", True))
+    refresh_enrichment = bool(body.get("refresh_enrichment", False))
+
+    try:
+        campaign = get_campaign(campaign_id)
+    except Exception as exc:
+        return JSONResponse({"error": f"Unknown campaign '{campaign_id}': {exc}"}, status_code=400)
+
+    if not config.LLM_API_KEY:
+        return JSONResponse({"error": "LLM_API_KEY environment variable is not set"}, status_code=400)
+    if not config.LLM_MODEL:
+        return JSONResponse({"error": "LLM_MODEL environment variable is not set"}, status_code=400)
+
+    lead_payload = _make_profile_lead_payload(body)
+    lead = normalize_lead(lead_payload)
+    enriched = await enrich_lead(lead)
+    evidence = await extract_evidence(
+        LiteLLMClient(
+            model=config.LLM_MODEL,
+            api_key=config.LLM_API_KEY,
+            provider=config.LLM_PROVIDER,
+            api_base=config.LLM_API_BASE,
+            timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+        ),
+        enriched,
+        campaign=campaign,
+    )
+    decision = await make_decision(
+        LiteLLMClient(
+            model=config.LLM_MODEL,
+            api_key=config.LLM_API_KEY,
+            provider=config.LLM_PROVIDER,
+            api_base=config.LLM_API_BASE,
+            timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+        ),
+        evidence,
+        campaign=campaign,
+    )
+    routing = route_decision(decision, evidence, campaign=campaign)
+    decision = decision.model_copy(update={"decision": routing})
+
+    company_profile = None
+    person_profile = None
+    memory_used: list[str] = []
+    company_history: list[dict] = []
+    person_history: list[dict] = []
+    if use_memory:
+        if lead.company_domain:
+            company_profile = await store.get_company_profile_by_domain(_pool, lead.company_domain)
+        if company_profile is None and lead.company_name:
+            matches = await store.search_company_profiles(_pool, lead.company_name, limit=1)
+            company_profile = matches[0] if matches else None
+        if company_profile:
+            company_history = await store.get_lead_memory_for_company(_pool, company_profile["id"], campaign_id=campaign_id)
+            memory_used.append(f"{len(company_history)} company history items")
+
+        person_profile = await store.get_person_profile(
+            _pool,
+            person_name=lead.person_name,
+            linkedin_url=lead.linkedin_url or "",
+            company_profile_id=company_profile["id"] if company_profile else None,
+        )
+        if person_profile:
+            person_history = await store.get_lead_memory_for_person(_pool, person_profile["id"], campaign_id=campaign_id)
+            memory_used.append(f"{len(person_history)} person history items")
+
+    history = company_history or person_history
+    return JSONResponse({
+        "campaign_id": campaign_id,
+        "input": lead_payload,
+        "current_evaluation": {
+            "lead": lead.model_dump(),
+            "enrichment": enriched.model_dump(),
+            "evidence": evidence.model_dump(),
+            "decision": decision.model_dump(),
+            **_fit_response(decision, evidence, routing, memory_used, history),
+        },
+        "memory": {
+            "enabled": use_memory,
+            "company_profile": company_profile,
+            "person_profile": person_profile,
+            "company_history_count": len(company_history),
+            "person_history_count": len(person_history),
+        },
+        "refresh_enrichment_requested": refresh_enrichment,
+    })
+
+
+@app.post("/api/agent/review-feedback")
+async def api_agent_review_feedback(request: Request):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    lead_id = (body.get("lead_id") or "").strip()
+    campaign_id = (body.get("campaign_id") or "").strip()
+    feedback_type = (body.get("feedback_type") or "").strip()
+    if not lead_id or not campaign_id or not feedback_type:
+        return JSONResponse({"error": "lead_id, campaign_id, and feedback_type are required"}, status_code=400)
+
+    feedback = await store.add_review_feedback(
+        _pool,
+        run_id=(body.get("run_id") or "").strip() or None,
+        lead_id=lead_id,
+        campaign_id=campaign_id,
+        feedback_type=feedback_type,
+        feedback_reason=(body.get("feedback_reason") or "").strip(),
+        corrected_decision=(body.get("corrected_decision") or "").strip() or None,
+        fit_outcome=(body.get("fit_outcome") or "").strip() or None,
+        owner=(body.get("owner") or "").strip(),
+    )
+    return JSONResponse({"ok": True, "feedback_id": feedback["id"], "feedback": feedback})
+
+
+@app.get("/api/agent/review-feedback")
+async def api_agent_list_review_feedback(
+    request: Request,
+    campaign_id: str = "",
+    feedback_type: str = "",
+    limit: int = 50,
+    offset: int = 0,
+):
+    _require_auth(request)
+    _require_db()
+    rows = await store.list_review_feedback(
+        _pool,
+        campaign_id=campaign_id or None,
+        feedback_type=feedback_type or None,
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(rows)
+
+
+@app.post("/api/agent/campaigns/{campaign_id}/versions")
+async def api_agent_create_campaign_version(request: Request, campaign_id: str):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    version = (body.get("version") or "").strip()
+    if not version:
+        return JSONResponse({"error": "version is required"}, status_code=400)
+
+    await store.ensure_campaign(
+        _pool,
+        campaign_id,
+        (body.get("campaign_name") or campaign_id.capitalize()).strip(),
+        (body.get("campaign_description") or "").strip(),
+    )
+
+    current_files = await store.get_skill_files_for_loader(_pool, campaign_id)
+    row = await store.create_campaign_version(
+        _pool,
+        campaign_id,
+        version,
+        config_json=(body.get("config_json") or current_files.get("config.json") or "").strip(),
+        product_md=body.get("product_md") or current_files.get("product.md") or "",
+        icp_md=body.get("icp_md") or current_files.get("icp.md") or "",
+        signals_md=body.get("signals_md") or current_files.get("signals.md") or "",
+        disqualification_md=body.get("disqualification_md") or current_files.get("disqualification.md") or "",
+        qualification_md=body.get("qualification_md") or current_files.get("qualification.md") or "",
+        created_by=(body.get("created_by") or "").strip(),
+        status=(body.get("status") or "draft").strip() or "draft",
+    )
+    return JSONResponse(row)
+
+
+@app.get("/api/agent/campaigns/{campaign_id}/versions")
+async def api_agent_list_campaign_versions(request: Request, campaign_id: str):
+    _require_auth(request)
+    _require_db()
+    return JSONResponse(await store.list_campaign_versions(_pool, campaign_id))
+
+
+@app.post("/api/agent/campaigns/{campaign_id}/versions/{version}/activate")
+async def api_agent_activate_campaign_version(request: Request, campaign_id: str, version: str):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    approved_by = (body.get("approved_by") or "").strip()
+    if not approved_by:
+        return JSONResponse({"error": "approved_by is required"}, status_code=400)
+
+    row = await store.activate_campaign_version(_pool, campaign_id, version, approved_by)
+    if row is None:
+        return JSONResponse({"error": "Campaign version not found"}, status_code=404)
+    await _apply_campaign_version_runtime(row)
+    return JSONResponse({"ok": True, "campaign_version": row})
+
+
+@app.post("/api/agent/campaigns/{campaign_id}/policies")
+async def api_agent_create_policy_version(request: Request, campaign_id: str):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    policy_version = (body.get("policy_version") or "").strip()
+    if not policy_version:
+        return JSONResponse({"error": "policy_version is required"}, status_code=400)
+
+    current_config = _safe_json_object(await store.get_skill_file(_pool, campaign_id, "config.json") or "{}")
+    current_settings = await store.get_settings(_pool, campaign_id=campaign_id)
+    qt = int(body.get("qualified_threshold", current_settings.get("qualified_threshold", current_config.get("qualified_threshold", 70))))
+    dt = int(body.get("disqualified_threshold", current_settings.get("disqualified_threshold", current_config.get("disqualified_threshold", 60))))
+    if dt >= qt:
+        return JSONResponse({"error": "disqualified_threshold must be below qualified_threshold"}, status_code=400)
+
+    row = await store.create_policy_version(
+        _pool,
+        campaign_id,
+        policy_version,
+        score_weights=body.get("score_weights") or current_config.get("score_weights") or {},
+        qualified_threshold=qt,
+        disqualified_threshold=dt,
+        routing_rules=body.get("routing_rules") or {},
+        created_by=(body.get("created_by") or "").strip(),
+        status=(body.get("status") or "draft").strip() or "draft",
+    )
+    return JSONResponse(row)
+
+
+@app.get("/api/agent/campaigns/{campaign_id}/policies")
+async def api_agent_list_policy_versions(request: Request, campaign_id: str):
+    _require_auth(request)
+    _require_db()
+    return JSONResponse(await store.list_policy_versions(_pool, campaign_id))
+
+
+@app.post("/api/agent/campaigns/{campaign_id}/policies/{policy_version}/activate")
+async def api_agent_activate_policy_version(request: Request, campaign_id: str, policy_version: str):
+    _require_auth(request)
+    _require_db()
+    body = await request.json()
+    approved_by = (body.get("approved_by") or "").strip()
+    if not approved_by:
+        return JSONResponse({"error": "approved_by is required"}, status_code=400)
+
+    row = await store.activate_policy_version(_pool, campaign_id, policy_version, approved_by)
+    if row is None:
+        return JSONResponse({"error": "Policy version not found"}, status_code=404)
+    applied_config = await _apply_policy_version_runtime(campaign_id, row)
+    return JSONResponse({"ok": True, "policy_version": row, "applied_config": applied_config})
 
 
 # ── API: campaign registry ────────────────────────────────────────────────────

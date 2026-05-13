@@ -5,6 +5,7 @@ a per-connection codec registered in create_pool().
 """
 
 import json
+import re
 from typing import Optional
 
 import asyncpg
@@ -107,6 +108,121 @@ CREATE TABLE IF NOT EXISTS skill_files (
     UNIQUE (campaign_id, filename)
 );
 CREATE INDEX IF NOT EXISTS idx_skill_files_campaign ON skill_files(campaign_id);
+
+CREATE TABLE IF NOT EXISTS company_profiles (
+    id                        BIGSERIAL PRIMARY KEY,
+    canonical_domain          TEXT,
+    company_name              TEXT        NOT NULL,
+    normalized_company_name   TEXT        NOT NULL,
+    latest_structured_profile JSONB       NOT NULL DEFAULT '{}',
+    latest_summary            TEXT        NOT NULL DEFAULT '',
+    latest_fit_by_campaign    JSONB       NOT NULL DEFAULT '{}',
+    first_seen_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    times_seen                INT         NOT NULL DEFAULT 1,
+    last_run_id               TEXT        REFERENCES runs(run_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_company_profiles_domain
+    ON company_profiles(canonical_domain)
+    WHERE canonical_domain IS NOT NULL AND canonical_domain <> '';
+CREATE INDEX IF NOT EXISTS idx_company_profiles_norm_name
+    ON company_profiles(normalized_company_name);
+
+CREATE TABLE IF NOT EXISTS person_profiles (
+    id                       BIGSERIAL PRIMARY KEY,
+    person_name              TEXT        NOT NULL,
+    normalized_person_name   TEXT        NOT NULL,
+    linkedin_url             TEXT,
+    company_profile_id       BIGINT      REFERENCES company_profiles(id) ON DELETE SET NULL,
+    latest_title             TEXT        NOT NULL DEFAULT '',
+    latest_summary           TEXT        NOT NULL DEFAULT '',
+    latest_fit_by_campaign   JSONB       NOT NULL DEFAULT '{}',
+    first_seen_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    times_seen               INT         NOT NULL DEFAULT 1,
+    last_run_id              TEXT        REFERENCES runs(run_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_person_profiles_linkedin
+    ON person_profiles(linkedin_url)
+    WHERE linkedin_url IS NOT NULL AND linkedin_url <> '';
+CREATE INDEX IF NOT EXISTS idx_person_profiles_norm_name
+    ON person_profiles(normalized_person_name);
+
+CREATE TABLE IF NOT EXISTS lead_memory (
+    id                   BIGSERIAL PRIMARY KEY,
+    run_id               TEXT        NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    lead_id              TEXT        NOT NULL,
+    campaign_id          TEXT        NOT NULL REFERENCES campaigns(id),
+    campaign_version     TEXT        NOT NULL DEFAULT 'v1',
+    policy_version       TEXT        NOT NULL DEFAULT 'v1',
+    company_profile_id   BIGINT      REFERENCES company_profiles(id) ON DELETE SET NULL,
+    person_profile_id    BIGINT      REFERENCES person_profiles(id) ON DELETE SET NULL,
+    raw_input            JSONB       NOT NULL DEFAULT '{}',
+    enrichment_snapshot  JSONB       NOT NULL DEFAULT '{}',
+    evidence_snapshot    JSONB       NOT NULL DEFAULT '{}',
+    decision_snapshot    JSONB       NOT NULL DEFAULT '{}',
+    routing              TEXT        NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lead_memory_run_id ON lead_memory(run_id);
+CREATE INDEX IF NOT EXISTS idx_lead_memory_campaign_id ON lead_memory(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_lead_memory_company_profile_id ON lead_memory(company_profile_id);
+CREATE INDEX IF NOT EXISTS idx_lead_memory_person_profile_id ON lead_memory(person_profile_id);
+CREATE INDEX IF NOT EXISTS idx_lead_memory_lead_id ON lead_memory(lead_id);
+
+CREATE TABLE IF NOT EXISTS review_feedback (
+    id                  BIGSERIAL PRIMARY KEY,
+    run_id              TEXT        REFERENCES runs(run_id) ON DELETE CASCADE,
+    lead_id             TEXT        NOT NULL,
+    campaign_id         TEXT        NOT NULL REFERENCES campaigns(id),
+    company_profile_id  BIGINT      REFERENCES company_profiles(id) ON DELETE SET NULL,
+    person_profile_id   BIGINT      REFERENCES person_profiles(id) ON DELETE SET NULL,
+    feedback_type       TEXT        NOT NULL,
+    feedback_reason     TEXT        NOT NULL DEFAULT '',
+    corrected_decision  TEXT,
+    fit_outcome         TEXT,
+    owner               TEXT        NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_review_feedback_campaign_id ON review_feedback(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_review_feedback_run_id ON review_feedback(run_id);
+CREATE INDEX IF NOT EXISTS idx_review_feedback_lead_id ON review_feedback(lead_id);
+
+CREATE TABLE IF NOT EXISTS campaign_versions (
+    id                   BIGSERIAL PRIMARY KEY,
+    campaign_id          TEXT        NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    version              TEXT        NOT NULL,
+    status               TEXT        NOT NULL DEFAULT 'draft',
+    config_json          TEXT        NOT NULL DEFAULT '',
+    product_md           TEXT        NOT NULL DEFAULT '',
+    icp_md               TEXT        NOT NULL DEFAULT '',
+    signals_md           TEXT        NOT NULL DEFAULT '',
+    disqualification_md  TEXT        NOT NULL DEFAULT '',
+    qualification_md     TEXT        NOT NULL DEFAULT '',
+    created_by           TEXT        NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    approved_by          TEXT,
+    approved_at          TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_versions_unique
+    ON campaign_versions(campaign_id, version);
+
+CREATE TABLE IF NOT EXISTS policy_versions (
+    id                     BIGSERIAL PRIMARY KEY,
+    campaign_id            TEXT        NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    policy_version         TEXT        NOT NULL,
+    score_weights          JSONB       NOT NULL DEFAULT '{}',
+    qualified_threshold    INT         NOT NULL,
+    disqualified_threshold INT         NOT NULL,
+    routing_rules          JSONB       NOT NULL DEFAULT '{}',
+    status                 TEXT        NOT NULL DEFAULT 'draft',
+    created_by             TEXT        NOT NULL DEFAULT '',
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    approved_by            TEXT,
+    approved_at            TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_policy_versions_unique
+    ON policy_versions(campaign_id, policy_version);
 """
 
 
@@ -128,6 +244,8 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
 async def create_tables(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_DDL)
+        await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS campaign_version TEXT DEFAULT 'v1'")
+        await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS policy_version TEXT DEFAULT 'v1'")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_size TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS industry TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS linkedin_url TEXT")
@@ -196,10 +314,13 @@ async def insert_run(
     filename: str,
     concurrency: int,
     campaign_id: str = "seedance",
+    campaign_version: str = "v1",
+    policy_version: str = "v1",
 ) -> None:
     await pool.execute(
-        "INSERT INTO runs (run_id, campaign_id, filename, concurrency) VALUES ($1, $2, $3, $4)",
-        run_id, campaign_id, filename, concurrency,
+        """INSERT INTO runs (run_id, campaign_id, filename, concurrency, campaign_version, policy_version)
+           VALUES ($1, $2, $3, $4, $5, $6)""",
+        run_id, campaign_id, filename, concurrency, campaign_version, policy_version,
     )
 
 
@@ -229,6 +350,7 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
             """
             SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
                    r.created_at, r.completed_at, r.email_status,
+                   r.campaign_version, r.policy_version,
                    COUNT(l.id) AS n_total,
                    COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
                    COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
@@ -246,6 +368,7 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
             """
             SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
                    r.created_at, r.completed_at, r.email_status,
+                   r.campaign_version, r.policy_version,
                    COUNT(l.id) AS n_total,
                    COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
                    COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
@@ -260,6 +383,8 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
         {
             "run_id":         r["run_id"],
             "campaign_id":    r["campaign_id"] or "seedance",
+            "campaign_version": r["campaign_version"] or "v1",
+            "policy_version": r["policy_version"] or "v1",
             "filename":       r["filename"],
             "status":         r["status"],
             "lead_count":     max(r["lead_count"] or 0, r["n_total"] or 0),
@@ -271,6 +396,42 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
         }
         for r in rows
     ]
+
+
+async def get_run(pool: asyncpg.Pool, run_id: str) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
+               r.created_at, r.completed_at, r.email_status,
+               r.campaign_version, r.policy_version,
+               COUNT(l.id) AS n_total,
+               COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
+               COUNT(CASE WHEN l.decision='review'       THEN 1 END) AS n_review,
+               COUNT(CASE WHEN l.decision='disqualified' THEN 1 END) AS n_disqualified
+          FROM runs r
+          LEFT JOIN leads l ON l.run_id = r.run_id
+         WHERE r.run_id = $1
+         GROUP BY r.run_id
+        """,
+        run_id,
+    )
+    if not row:
+        return None
+    return {
+        "run_id": row["run_id"],
+        "campaign_id": row["campaign_id"] or "seedance",
+        "campaign_version": row["campaign_version"] or "v1",
+        "policy_version": row["policy_version"] or "v1",
+        "filename": row["filename"],
+        "status": row["status"],
+        "lead_count": max(row["lead_count"] or 0, row["n_total"] or 0),
+        "n_qualified": row["n_qualified"],
+        "n_review": row["n_review"],
+        "n_disqualified": row["n_disqualified"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+        "email_status": row["email_status"] or "not_sent",
+    }
 
 
 async def delete_run(pool: asyncpg.Pool, run_id: str) -> None:
@@ -376,6 +537,146 @@ def _row_to_lead(row: asyncpg.Record) -> dict:
     }
 
 
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _normalize_domain(domain: str) -> str:
+    value = _normalize_text(domain).lower()
+    value = re.sub(r"^https?://", "", value)
+    value = re.sub(r"^www\.", "", value)
+    return value.rstrip("/")
+
+
+def normalize_company_key(company_name: str, domain: str = "") -> dict:
+    clean_name = _normalize_text(company_name)
+    normalized_company_name = re.sub(r"[^a-z0-9]+", " ", clean_name.lower()).strip()
+    canonical_domain = _normalize_domain(domain)
+    return {
+        "company_name": clean_name,
+        "normalized_company_name": normalized_company_name,
+        "canonical_domain": canonical_domain or None,
+    }
+
+
+def normalize_person_key(person_name: str, linkedin_url: str = "") -> dict:
+    clean_name = _normalize_text(person_name)
+    normalized_person_name = re.sub(r"[^a-z0-9]+", " ", clean_name.lower()).strip()
+    normalized_linkedin = _normalize_text(linkedin_url)
+    if normalized_linkedin and not normalized_linkedin.startswith("http"):
+        normalized_linkedin = f"https://{normalized_linkedin}"
+    return {
+        "person_name": clean_name,
+        "normalized_person_name": normalized_person_name,
+        "linkedin_url": normalized_linkedin or None,
+    }
+
+
+def _row_to_company_profile(row: asyncpg.Record) -> dict:
+    return {
+        "id": row["id"],
+        "canonical_domain": row["canonical_domain"] or "",
+        "company_name": row["company_name"],
+        "normalized_company_name": row["normalized_company_name"],
+        "latest_structured_profile": row["latest_structured_profile"] or {},
+        "latest_summary": row["latest_summary"] or "",
+        "latest_fit_by_campaign": row["latest_fit_by_campaign"] or {},
+        "first_seen_at": row["first_seen_at"].isoformat() if row["first_seen_at"] else None,
+        "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
+        "times_seen": row["times_seen"] or 0,
+        "last_run_id": row["last_run_id"],
+    }
+
+
+def _row_to_person_profile(row: asyncpg.Record) -> dict:
+    return {
+        "id": row["id"],
+        "person_name": row["person_name"],
+        "normalized_person_name": row["normalized_person_name"],
+        "linkedin_url": row["linkedin_url"] or "",
+        "company_profile_id": row["company_profile_id"],
+        "latest_title": row["latest_title"] or "",
+        "latest_summary": row["latest_summary"] or "",
+        "latest_fit_by_campaign": row["latest_fit_by_campaign"] or {},
+        "first_seen_at": row["first_seen_at"].isoformat() if row["first_seen_at"] else None,
+        "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
+        "times_seen": row["times_seen"] or 0,
+        "last_run_id": row["last_run_id"],
+    }
+
+
+def _row_to_lead_memory(row: asyncpg.Record) -> dict:
+    return {
+        "id": row["id"],
+        "run_id": row["run_id"],
+        "lead_id": row["lead_id"],
+        "campaign_id": row["campaign_id"],
+        "campaign_version": row["campaign_version"] or "v1",
+        "policy_version": row["policy_version"] or "v1",
+        "company_profile_id": row["company_profile_id"],
+        "person_profile_id": row["person_profile_id"],
+        "raw_input": row["raw_input"] or {},
+        "enrichment_snapshot": row["enrichment_snapshot"] or {},
+        "evidence_snapshot": row["evidence_snapshot"] or {},
+        "decision_snapshot": row["decision_snapshot"] or {},
+        "routing": row["routing"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+def _row_to_review_feedback(row: asyncpg.Record) -> dict:
+    return {
+        "id": row["id"],
+        "run_id": row["run_id"],
+        "lead_id": row["lead_id"],
+        "campaign_id": row["campaign_id"],
+        "company_profile_id": row["company_profile_id"],
+        "person_profile_id": row["person_profile_id"],
+        "feedback_type": row["feedback_type"],
+        "feedback_reason": row["feedback_reason"] or "",
+        "corrected_decision": row["corrected_decision"],
+        "fit_outcome": row["fit_outcome"],
+        "owner": row["owner"] or "",
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+def _row_to_campaign_version(row: asyncpg.Record) -> dict:
+    return {
+        "id": row["id"],
+        "campaign_id": row["campaign_id"],
+        "version": row["version"],
+        "status": row["status"],
+        "config_json": row["config_json"] or "",
+        "product_md": row["product_md"] or "",
+        "icp_md": row["icp_md"] or "",
+        "signals_md": row["signals_md"] or "",
+        "disqualification_md": row["disqualification_md"] or "",
+        "qualification_md": row["qualification_md"] or "",
+        "created_by": row["created_by"] or "",
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "approved_by": row["approved_by"] or "",
+        "approved_at": row["approved_at"].isoformat() if row["approved_at"] else None,
+    }
+
+
+def _row_to_policy_version(row: asyncpg.Record) -> dict:
+    return {
+        "id": row["id"],
+        "campaign_id": row["campaign_id"],
+        "policy_version": row["policy_version"],
+        "score_weights": row["score_weights"] or {},
+        "qualified_threshold": row["qualified_threshold"],
+        "disqualified_threshold": row["disqualified_threshold"],
+        "routing_rules": row["routing_rules"] or {},
+        "status": row["status"],
+        "created_by": row["created_by"] or "",
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "approved_by": row["approved_by"] or "",
+        "approved_at": row["approved_at"].isoformat() if row["approved_at"] else None,
+    }
+
+
 async def update_run_email_status(pool: asyncpg.Pool, run_id: str, status: str) -> None:
     await pool.execute(
         "UPDATE runs SET email_status=$1 WHERE run_id=$2", status, run_id
@@ -410,6 +711,694 @@ async def get_leads_for_email(pool: asyncpg.Pool, run_id: str, max_score: int) -
         run_id, max_score,
     )
     return [_row_to_lead(r) for r in rows]
+
+
+# ── Agent memory ───────────────────────────────────────────────────────────────
+
+async def get_company_profile_by_domain(
+    pool: asyncpg.Pool, domain: str
+) -> Optional[dict]:
+    canonical_domain = _normalize_domain(domain)
+    if not canonical_domain:
+        return None
+    row = await pool.fetchrow(
+        "SELECT * FROM company_profiles WHERE canonical_domain = $1",
+        canonical_domain,
+    )
+    return _row_to_company_profile(row) if row else None
+
+
+async def upsert_company_profile(
+    pool: asyncpg.Pool,
+    company_name: str,
+    domain: str = "",
+    *,
+    structured_profile: Optional[dict] = None,
+    summary: str = "",
+    campaign_id: Optional[str] = None,
+    fit_summary: Optional[dict] = None,
+    run_id: Optional[str] = None,
+) -> dict:
+    normalized = normalize_company_key(company_name, domain)
+    if not normalized["company_name"] and not normalized["canonical_domain"]:
+        raise ValueError("company_name or domain is required")
+
+    row = None
+    if normalized["canonical_domain"]:
+        row = await pool.fetchrow(
+            "SELECT * FROM company_profiles WHERE canonical_domain = $1",
+            normalized["canonical_domain"],
+        )
+    if row is None and normalized["normalized_company_name"]:
+        row = await pool.fetchrow(
+            """SELECT * FROM company_profiles
+                 WHERE normalized_company_name = $1
+                 ORDER BY times_seen DESC, id ASC
+                 LIMIT 1""",
+            normalized["normalized_company_name"],
+        )
+
+    latest_fit_by_campaign = dict((row["latest_fit_by_campaign"] if row else None) or {})
+    if campaign_id and fit_summary is not None:
+        latest_fit_by_campaign[campaign_id] = fit_summary
+
+    structured_profile = structured_profile or ((row["latest_structured_profile"] if row else None) or {})
+    latest_summary = summary or ((row["latest_summary"] if row else None) or "")
+
+    if row:
+        updated = await pool.fetchrow(
+            """
+            UPDATE company_profiles
+               SET canonical_domain = COALESCE($2, canonical_domain),
+                   company_name = CASE WHEN $3 <> '' THEN $3 ELSE company_name END,
+                   normalized_company_name = CASE WHEN $4 <> '' THEN $4 ELSE normalized_company_name END,
+                   latest_structured_profile = $5,
+                   latest_summary = $6,
+                   latest_fit_by_campaign = $7,
+                   last_seen_at = now(),
+                   times_seen = times_seen + 1,
+                   last_run_id = COALESCE($8, last_run_id)
+             WHERE id = $1
+         RETURNING *
+            """,
+            row["id"],
+            normalized["canonical_domain"],
+            normalized["company_name"],
+            normalized["normalized_company_name"],
+            structured_profile,
+            latest_summary,
+            latest_fit_by_campaign,
+            run_id,
+        )
+    else:
+        updated = await pool.fetchrow(
+            """
+            INSERT INTO company_profiles (
+                canonical_domain, company_name, normalized_company_name,
+                latest_structured_profile, latest_summary, latest_fit_by_campaign, last_run_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING *
+            """,
+            normalized["canonical_domain"],
+            normalized["company_name"] or normalized["canonical_domain"] or "unknown",
+            normalized["normalized_company_name"] or normalized["canonical_domain"] or "unknown",
+            structured_profile,
+            latest_summary,
+            latest_fit_by_campaign,
+            run_id,
+        )
+    return _row_to_company_profile(updated)
+
+
+async def search_company_profiles(
+    pool: asyncpg.Pool, query: str, limit: int = 20
+) -> list[dict]:
+    normalized_query = re.sub(r"[^a-z0-9]+", " ", _normalize_text(query).lower()).strip()
+    if not normalized_query:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT * FROM company_profiles
+         WHERE normalized_company_name LIKE '%' || $1 || '%'
+            OR canonical_domain LIKE '%' || $2 || '%'
+         ORDER BY times_seen DESC, last_seen_at DESC
+         LIMIT $3
+        """,
+        normalized_query,
+        _normalize_domain(query),
+        max(1, limit),
+    )
+    return [_row_to_company_profile(r) for r in rows]
+
+
+async def get_person_profile(
+    pool: asyncpg.Pool,
+    *,
+    person_name: str = "",
+    linkedin_url: str = "",
+    company_profile_id: Optional[int] = None,
+) -> Optional[dict]:
+    normalized = normalize_person_key(person_name, linkedin_url)
+    row = None
+    if normalized["linkedin_url"]:
+        row = await pool.fetchrow(
+            "SELECT * FROM person_profiles WHERE linkedin_url = $1",
+            normalized["linkedin_url"],
+        )
+    if row is None and normalized["normalized_person_name"]:
+        if company_profile_id is not None:
+            row = await pool.fetchrow(
+                """
+                SELECT * FROM person_profiles
+                 WHERE normalized_person_name = $1 AND company_profile_id = $2
+                 ORDER BY times_seen DESC, id ASC
+                 LIMIT 1
+                """,
+                normalized["normalized_person_name"],
+                company_profile_id,
+            )
+        else:
+            row = await pool.fetchrow(
+                """
+                SELECT * FROM person_profiles
+                 WHERE normalized_person_name = $1
+                 ORDER BY times_seen DESC, id ASC
+                 LIMIT 1
+                """,
+                normalized["normalized_person_name"],
+            )
+    return _row_to_person_profile(row) if row else None
+
+
+async def upsert_person_profile(
+    pool: asyncpg.Pool,
+    person_name: str,
+    *,
+    linkedin_url: str = "",
+    company_profile_id: Optional[int] = None,
+    title: str = "",
+    summary: str = "",
+    campaign_id: Optional[str] = None,
+    fit_summary: Optional[dict] = None,
+    run_id: Optional[str] = None,
+) -> dict:
+    normalized = normalize_person_key(person_name, linkedin_url)
+    if not normalized["person_name"] and not normalized["linkedin_url"]:
+        raise ValueError("person_name or linkedin_url is required")
+
+    current = await get_person_profile(
+        pool,
+        person_name=normalized["person_name"],
+        linkedin_url=normalized["linkedin_url"] or "",
+        company_profile_id=company_profile_id,
+    )
+
+    latest_fit_by_campaign = dict((current["latest_fit_by_campaign"] if current else None) or {})
+    if campaign_id and fit_summary is not None:
+        latest_fit_by_campaign[campaign_id] = fit_summary
+
+    latest_title = title or ((current["latest_title"] if current else None) or "")
+    latest_summary = summary or ((current["latest_summary"] if current else None) or "")
+
+    if current:
+        row = await pool.fetchrow(
+            """
+            UPDATE person_profiles
+               SET person_name = CASE WHEN $2 <> '' THEN $2 ELSE person_name END,
+                   normalized_person_name = CASE WHEN $3 <> '' THEN $3 ELSE normalized_person_name END,
+                   linkedin_url = COALESCE($4, linkedin_url),
+                   company_profile_id = COALESCE($5, company_profile_id),
+                   latest_title = $6,
+                   latest_summary = $7,
+                   latest_fit_by_campaign = $8,
+                   last_seen_at = now(),
+                   times_seen = times_seen + 1,
+                   last_run_id = COALESCE($9, last_run_id)
+             WHERE id = $1
+         RETURNING *
+            """,
+            current["id"],
+            normalized["person_name"],
+            normalized["normalized_person_name"],
+            normalized["linkedin_url"],
+            company_profile_id,
+            latest_title,
+            latest_summary,
+            latest_fit_by_campaign,
+            run_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """
+            INSERT INTO person_profiles (
+                person_name, normalized_person_name, linkedin_url,
+                company_profile_id, latest_title, latest_summary,
+                latest_fit_by_campaign, last_run_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING *
+            """,
+            normalized["person_name"] or normalized["linkedin_url"] or "unknown",
+            normalized["normalized_person_name"] or normalized["linkedin_url"] or "unknown",
+            normalized["linkedin_url"],
+            company_profile_id,
+            latest_title,
+            latest_summary,
+            latest_fit_by_campaign,
+            run_id,
+        )
+    return _row_to_person_profile(row)
+
+
+async def search_person_profiles(
+    pool: asyncpg.Pool, query: str, limit: int = 20
+) -> list[dict]:
+    normalized_query = re.sub(r"[^a-z0-9]+", " ", _normalize_text(query).lower()).strip()
+    if not normalized_query:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT * FROM person_profiles
+         WHERE normalized_person_name LIKE '%' || $1 || '%'
+            OR linkedin_url LIKE '%' || $2 || '%'
+         ORDER BY times_seen DESC, last_seen_at DESC
+         LIMIT $3
+        """,
+        normalized_query,
+        _normalize_text(query),
+        max(1, limit),
+    )
+    return [_row_to_person_profile(r) for r in rows]
+
+
+async def insert_lead_memory(
+    pool: asyncpg.Pool,
+    *,
+    run_id: str,
+    lead_id: str,
+    campaign_id: str,
+    routing: str,
+    campaign_version: str = "v1",
+    policy_version: str = "v1",
+    company_profile_id: Optional[int] = None,
+    person_profile_id: Optional[int] = None,
+    raw_input: Optional[dict] = None,
+    enrichment_snapshot: Optional[dict] = None,
+    evidence_snapshot: Optional[dict] = None,
+    decision_snapshot: Optional[dict] = None,
+) -> dict:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO lead_memory (
+            run_id, lead_id, campaign_id, campaign_version, policy_version,
+            company_profile_id, person_profile_id, raw_input, enrichment_snapshot,
+            evidence_snapshot, decision_snapshot, routing
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        RETURNING *
+        """,
+        run_id,
+        lead_id,
+        campaign_id,
+        campaign_version,
+        policy_version,
+        company_profile_id,
+        person_profile_id,
+        raw_input or {},
+        enrichment_snapshot or {},
+        evidence_snapshot or {},
+        decision_snapshot or {},
+        routing,
+    )
+    return _row_to_lead_memory(row)
+
+
+async def get_lead_memory_for_company(
+    pool: asyncpg.Pool,
+    company_profile_id: int,
+    campaign_id: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict]:
+    if campaign_id:
+        rows = await pool.fetch(
+            """
+            SELECT * FROM lead_memory
+             WHERE company_profile_id = $1 AND campaign_id = $2
+             ORDER BY created_at DESC
+             LIMIT $3
+            """,
+            company_profile_id,
+            campaign_id,
+            max(1, limit),
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT * FROM lead_memory
+             WHERE company_profile_id = $1
+             ORDER BY created_at DESC
+             LIMIT $2
+            """,
+            company_profile_id,
+            max(1, limit),
+        )
+    return [_row_to_lead_memory(r) for r in rows]
+
+
+async def get_lead_memory_for_person(
+    pool: asyncpg.Pool,
+    person_profile_id: int,
+    campaign_id: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict]:
+    if campaign_id:
+        rows = await pool.fetch(
+            """
+            SELECT * FROM lead_memory
+             WHERE person_profile_id = $1 AND campaign_id = $2
+             ORDER BY created_at DESC
+             LIMIT $3
+            """,
+            person_profile_id,
+            campaign_id,
+            max(1, limit),
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT * FROM lead_memory
+             WHERE person_profile_id = $1
+             ORDER BY created_at DESC
+             LIMIT $2
+            """,
+            person_profile_id,
+            max(1, limit),
+        )
+    return [_row_to_lead_memory(r) for r in rows]
+
+
+async def get_lead_memory_for_run(pool: asyncpg.Pool, run_id: str) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT * FROM lead_memory WHERE run_id = $1 ORDER BY created_at DESC",
+        run_id,
+    )
+    return [_row_to_lead_memory(r) for r in rows]
+
+
+async def get_lead_memory_item(
+    pool: asyncpg.Pool, run_id: str, lead_id: str
+) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM lead_memory
+         WHERE run_id = $1 AND lead_id = $2
+         ORDER BY created_at DESC
+         LIMIT 1
+        """,
+        run_id,
+        lead_id,
+    )
+    return _row_to_lead_memory(row) if row else None
+
+
+async def add_review_feedback(
+    pool: asyncpg.Pool,
+    *,
+    lead_id: str,
+    campaign_id: str,
+    feedback_type: str,
+    run_id: Optional[str] = None,
+    company_profile_id: Optional[int] = None,
+    person_profile_id: Optional[int] = None,
+    feedback_reason: str = "",
+    corrected_decision: Optional[str] = None,
+    fit_outcome: Optional[str] = None,
+    owner: str = "",
+) -> dict:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO review_feedback (
+            run_id, lead_id, campaign_id, company_profile_id, person_profile_id,
+            feedback_type, feedback_reason, corrected_decision, fit_outcome, owner
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        RETURNING *
+        """,
+        run_id,
+        lead_id,
+        campaign_id,
+        company_profile_id,
+        person_profile_id,
+        feedback_type,
+        feedback_reason,
+        corrected_decision,
+        fit_outcome,
+        owner,
+    )
+    return _row_to_review_feedback(row)
+
+
+async def list_review_feedback(
+    pool: asyncpg.Pool,
+    *,
+    campaign_id: Optional[str] = None,
+    feedback_type: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    clauses = []
+    params: list = []
+    if campaign_id:
+        params.append(campaign_id)
+        clauses.append(f"campaign_id = ${len(params)}")
+    if feedback_type:
+        params.append(feedback_type)
+        clauses.append(f"feedback_type = ${len(params)}")
+    params.extend([max(1, limit), max(0, offset)])
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = await pool.fetch(
+        f"""
+        SELECT * FROM review_feedback
+        {where}
+        ORDER BY created_at DESC
+        LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """,
+        *params,
+    )
+    return [_row_to_review_feedback(r) for r in rows]
+
+
+# ── Campaign versions ──────────────────────────────────────────────────────────
+
+async def create_campaign_version(
+    pool: asyncpg.Pool,
+    campaign_id: str,
+    version: str,
+    *,
+    config_json: str = "",
+    product_md: str = "",
+    icp_md: str = "",
+    signals_md: str = "",
+    disqualification_md: str = "",
+    qualification_md: str = "",
+    created_by: str = "",
+    status: str = "draft",
+) -> dict:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO campaign_versions (
+            campaign_id, version, status, config_json, product_md, icp_md,
+            signals_md, disqualification_md, qualification_md, created_by
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (campaign_id, version) DO UPDATE SET
+            status = EXCLUDED.status,
+            config_json = EXCLUDED.config_json,
+            product_md = EXCLUDED.product_md,
+            icp_md = EXCLUDED.icp_md,
+            signals_md = EXCLUDED.signals_md,
+            disqualification_md = EXCLUDED.disqualification_md,
+            qualification_md = EXCLUDED.qualification_md,
+            created_by = EXCLUDED.created_by
+        RETURNING *
+        """,
+        campaign_id, version, status, config_json, product_md, icp_md,
+        signals_md, disqualification_md, qualification_md, created_by,
+    )
+    return _row_to_campaign_version(row)
+
+
+async def list_campaign_versions(pool: asyncpg.Pool, campaign_id: str) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT * FROM campaign_versions
+         WHERE campaign_id = $1
+         ORDER BY created_at DESC, id DESC
+        """,
+        campaign_id,
+    )
+    return [_row_to_campaign_version(r) for r in rows]
+
+
+async def get_active_campaign_version(pool: asyncpg.Pool, campaign_id: str) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM campaign_versions
+         WHERE campaign_id = $1 AND status = 'active'
+         ORDER BY approved_at DESC NULLS LAST, created_at DESC, id DESC
+         LIMIT 1
+        """,
+        campaign_id,
+    )
+    return _row_to_campaign_version(row) if row else None
+
+
+async def get_campaign_version(
+    pool: asyncpg.Pool, campaign_id: str, version: str
+) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM campaign_versions
+         WHERE campaign_id = $1 AND version = $2
+         LIMIT 1
+        """,
+        campaign_id,
+        version,
+    )
+    return _row_to_campaign_version(row) if row else None
+
+
+async def activate_campaign_version(
+    pool: asyncpg.Pool, campaign_id: str, version: str, approved_by: str
+) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM campaign_versions
+         WHERE campaign_id = $1 AND version = $2
+         LIMIT 1
+        """,
+        campaign_id,
+        version,
+    )
+    if not row:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE campaign_versions
+                   SET status = CASE WHEN status = 'active' THEN 'archived' ELSE status END
+                 WHERE campaign_id = $1
+                """,
+                campaign_id,
+            )
+            updated = await conn.fetchrow(
+                """
+                UPDATE campaign_versions
+                   SET status='active', approved_by=$3, approved_at=now()
+                 WHERE campaign_id = $1 AND version = $2
+             RETURNING *
+                """,
+                campaign_id,
+                version,
+                approved_by,
+            )
+    return _row_to_campaign_version(updated) if updated else None
+
+
+# ── Policy versions ────────────────────────────────────────────────────────────
+
+async def create_policy_version(
+    pool: asyncpg.Pool,
+    campaign_id: str,
+    policy_version: str,
+    *,
+    score_weights: Optional[dict] = None,
+    qualified_threshold: int = 70,
+    disqualified_threshold: int = 60,
+    routing_rules: Optional[dict] = None,
+    created_by: str = "",
+    status: str = "draft",
+) -> dict:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO policy_versions (
+            campaign_id, policy_version, score_weights, qualified_threshold,
+            disqualified_threshold, routing_rules, status, created_by
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT (campaign_id, policy_version) DO UPDATE SET
+            score_weights = EXCLUDED.score_weights,
+            qualified_threshold = EXCLUDED.qualified_threshold,
+            disqualified_threshold = EXCLUDED.disqualified_threshold,
+            routing_rules = EXCLUDED.routing_rules,
+            status = EXCLUDED.status,
+            created_by = EXCLUDED.created_by
+        RETURNING *
+        """,
+        campaign_id,
+        policy_version,
+        score_weights or {},
+        qualified_threshold,
+        disqualified_threshold,
+        routing_rules or {},
+        status,
+        created_by,
+    )
+    return _row_to_policy_version(row)
+
+
+async def list_policy_versions(pool: asyncpg.Pool, campaign_id: str) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT * FROM policy_versions
+         WHERE campaign_id = $1
+         ORDER BY created_at DESC, id DESC
+        """,
+        campaign_id,
+    )
+    return [_row_to_policy_version(r) for r in rows]
+
+
+async def get_active_policy_version(pool: asyncpg.Pool, campaign_id: str) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM policy_versions
+         WHERE campaign_id = $1 AND status = 'active'
+         ORDER BY approved_at DESC NULLS LAST, created_at DESC, id DESC
+         LIMIT 1
+        """,
+        campaign_id,
+    )
+    return _row_to_policy_version(row) if row else None
+
+
+async def get_policy_version(
+    pool: asyncpg.Pool, campaign_id: str, policy_version: str
+) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM policy_versions
+         WHERE campaign_id = $1 AND policy_version = $2
+         LIMIT 1
+        """,
+        campaign_id,
+        policy_version,
+    )
+    return _row_to_policy_version(row) if row else None
+
+
+async def activate_policy_version(
+    pool: asyncpg.Pool, campaign_id: str, policy_version: str, approved_by: str
+) -> Optional[dict]:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM policy_versions
+         WHERE campaign_id = $1 AND policy_version = $2
+         LIMIT 1
+        """,
+        campaign_id,
+        policy_version,
+    )
+    if not row:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE policy_versions
+                   SET status = CASE WHEN status = 'active' THEN 'archived' ELSE status END
+                 WHERE campaign_id = $1
+                """,
+                campaign_id,
+            )
+            updated = await conn.fetchrow(
+                """
+                UPDATE policy_versions
+                   SET status='active', approved_by=$3, approved_at=now()
+                 WHERE campaign_id = $1 AND policy_version = $2
+             RETURNING *
+                """,
+                campaign_id,
+                policy_version,
+                approved_by,
+            )
+    return _row_to_policy_version(updated) if updated else None
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

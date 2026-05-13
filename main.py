@@ -122,7 +122,7 @@ async def _run_lead_pipeline(
     decision = decision.model_copy(update={"decision": routing})
 
     # Write outputs
-    await write_result(lead, evidence, decision, routing, output_dir)
+    await write_result(lead, enriched, evidence, decision, routing, output_dir)
 
     stats.record(routing)
     logger.info(

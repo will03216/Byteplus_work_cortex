@@ -1,0 +1,65 @@
+{
+  "benchmark_id": "kling-v1",
+  "campaign_id": "kling",
+  "description": "Kling regression benchmark with obvious fit and obvious no-fit cases.",
+  "cases": [
+    {
+      "case_id": "kling-qualified-001",
+      "description": "Short-form content executive with direct AI video workflow signal",
+      "lead": {
+        "lead_id": "kling-qualified-001",
+        "person_name": "Tina Zhao",
+        "title": "VP Creative Production",
+        "company_name": "FlashFrame Media",
+        "company_domain": "flashframe.example",
+        "company_size": "140",
+        "linkedin_url": "https://linkedin.com/in/tina-zhao",
+        "signal_text": "Tina Zhao (VP Creative Production at FlashFrame Media) posted about faster vertical video generation for episodic and social campaigns using AI. Trigify qualification note: Oversees scaled short-form production and testing workflows. Company details - industry: Short-form Video Production, company size: 140 employees, location: Singapore.",
+        "signal_type": "linkedin_post",
+        "signal_timestamp": "2026-05-11T00:00:00+00:00"
+      },
+      "raw_row": {
+        "INDUSTRY": "Short-form Video Production",
+        "COMPANY SIZE": "140",
+        "ICP SCORE": "Oversees scaled short-form production and testing workflows.",
+        "LOCATION": "Singapore",
+        "HQ COMPANY LOCATION": "Singapore",
+        "INTERACTION": "posted",
+        "POST URL": "https://linkedin.com/posts/example-kling-post"
+      },
+      "expected": {
+        "routing": "qualified",
+        "min_score": 70
+      }
+    },
+    {
+      "case_id": "kling-disqualified-001",
+      "description": "Government procurement role with no plausible AI video workflow",
+      "lead": {
+        "lead_id": "kling-disqualified-001",
+        "person_name": "Neil Carter",
+        "title": "Procurement Officer",
+        "company_name": "Metro Civic Services",
+        "company_domain": "metrocivic.example",
+        "company_size": "1200",
+        "linkedin_url": "https://linkedin.com/in/neil-carter",
+        "signal_text": "Neil Carter (Procurement Officer at Metro Civic Services) liked a post about AI video models. Trigify qualification note: Public-sector procurement role with no identified content production workflow. Company details - industry: Government, company size: 1200 employees, location: London.",
+        "signal_type": "linkedin_engagement",
+        "signal_timestamp": "2026-05-11T00:00:00+00:00"
+      },
+      "raw_row": {
+        "INDUSTRY": "Government",
+        "COMPANY SIZE": "1200",
+        "ICP SCORE": "Public-sector procurement role with no identified content production workflow.",
+        "LOCATION": "London",
+        "HQ COMPANY LOCATION": "London",
+        "INTERACTION": "liked",
+        "POST URL": "https://linkedin.com/posts/example-gov-like"
+      },
+      "expected": {
+        "routing": "disqualified",
+        "max_score": 59
+      }
+    }
+  ]
+}

@@ -6,8 +6,9 @@ Three CSVs (append mode, thread-safe via file locks):
   disqualified_leads.csv
   review_leads.csv
 
-Three JSON artifacts per lead (in artifacts/):
+Four JSON artifacts per lead (in artifacts/):
   {lead_id}_input.json
+  {lead_id}_enrichment.json
   {lead_id}_evidence.json
   {lead_id}_decision.json
 """
@@ -24,6 +25,7 @@ import config
 from normalization.normalizer import LeadInput
 from claude.stage1_evidence import EvidenceOutput
 from claude.stage2_decision import DecisionOutput
+from tools.enrichment import EnrichedLead
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ def _build_csv_row(
 
 async def write_result(
     lead:       LeadInput,
+    enriched:   EnrichedLead,
     evidence:   EvidenceOutput,
     decision:   DecisionOutput,
     routing:    Literal["qualified", "disqualified", "review"],
@@ -99,7 +102,7 @@ async def write_result(
     """
     Write all outputs for a single lead:
       - One row to the appropriate CSV
-      - Three JSON artifact files
+      - Four JSON artifact files
 
     Uses asyncio.Lock to prevent concurrent CSV writes from interleaving.
     """
@@ -108,6 +111,7 @@ async def write_result(
 
     # Write JSON artifacts (no lock needed — unique filenames)
     _write_artifact(artifacts_dir, lead.lead_id, "input",    lead.model_dump())
+    _write_artifact(artifacts_dir, lead.lead_id, "enrichment", enriched.model_dump())
     _write_artifact(artifacts_dir, lead.lead_id, "evidence", evidence.model_dump())
     _write_artifact(artifacts_dir, lead.lead_id, "decision", decision.model_dump())
 

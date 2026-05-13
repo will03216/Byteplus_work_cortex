@@ -1,0 +1,124 @@
+{
+  "benchmark_id": "seedance-v1",
+  "campaign_id": "seedance",
+  "description": "Seedance regression benchmark with strong-fit, no-fit, and borderline examples.",
+  "cases": [
+    {
+      "case_id": "seedance-qualified-001",
+      "description": "Strong film production executive with direct workflow signal",
+      "lead": {
+        "lead_id": "seedance-qualified-001",
+        "person_name": "Avery Cole",
+        "title": "Head of Production",
+        "company_name": "Northlight Studios",
+        "company_domain": "northlightstudios.example",
+        "company_size": "250",
+        "linkedin_url": "https://linkedin.com/in/avery-cole",
+        "signal_text": "Avery Cole (Head of Production at Northlight Studios) posted about scaling AI-assisted video production workflows for film trailers and episodic content. Trigify qualification note: Leading production workflow modernization across a multi-title studio slate. Company details - industry: Film Production, company size: 250 employees, location: Los Angeles.",
+        "signal_type": "linkedin_post",
+        "signal_timestamp": "2026-05-11T00:00:00+00:00"
+      },
+      "raw_row": {
+        "INDUSTRY": "Film Production",
+        "COMPANY SIZE": "250",
+        "ICP SCORE": "Leading production workflow modernization across a multi-title studio slate.",
+        "LOCATION": "Los Angeles",
+        "HQ COMPANY LOCATION": "Los Angeles",
+        "INTERACTION": "posted",
+        "POST URL": "https://linkedin.com/posts/example-film-post"
+      },
+      "expected": {
+        "routing": "qualified",
+        "min_score": 70
+      }
+    },
+    {
+      "case_id": "seedance-disqualified-001",
+      "description": "Wrong industry plus junior role",
+      "lead": {
+        "lead_id": "seedance-disqualified-001",
+        "person_name": "Morgan Lee",
+        "title": "Junior Operations Analyst",
+        "company_name": "TransitLedger Logistics",
+        "company_domain": "transitledger.example",
+        "company_size": "900",
+        "linkedin_url": "https://linkedin.com/in/morgan-lee",
+        "signal_text": "Morgan Lee (Junior Operations Analyst at TransitLedger Logistics) liked a LinkedIn post. Trigify qualification note: Logistics analytics role with no stated creative or video workflow. Company details - industry: Logistics, company size: 900 employees, location: Chicago.",
+        "signal_type": "linkedin_engagement",
+        "signal_timestamp": "2026-05-11T00:00:00+00:00"
+      },
+      "raw_row": {
+        "INDUSTRY": "Logistics",
+        "COMPANY SIZE": "900",
+        "ICP SCORE": "Logistics analytics role with no stated creative or video workflow.",
+        "LOCATION": "Chicago",
+        "HQ COMPANY LOCATION": "Chicago",
+        "INTERACTION": "liked",
+        "POST URL": "https://linkedin.com/posts/example-logistics-like"
+      },
+      "expected": {
+        "routing": "disqualified",
+        "max_score": 59
+      }
+    },
+    {
+      "case_id": "seedance-review-001",
+      "description": "Adjacent creative-performance manager with implied pain but weaker buying power",
+      "lead": {
+        "lead_id": "seedance-review-001",
+        "person_name": "Jordan Park",
+        "title": "Creative Operations Manager",
+        "company_name": "Pulse Performance Media",
+        "company_domain": "pulseperformance.example",
+        "company_size": "85",
+        "linkedin_url": "https://linkedin.com/in/jordan-park",
+        "signal_text": "Jordan Park (Creative Operations Manager at Pulse Performance Media) commented on a post about accelerating ad creative iteration with AI video. Trigify qualification note: Team produces many paid social variants but no explicit budget authority confirmed. Company details - industry: Performance Marketing, company size: 85 employees, location: New York.",
+        "signal_type": "linkedin_comment",
+        "signal_timestamp": "2026-05-11T00:00:00+00:00"
+      },
+      "raw_row": {
+        "INDUSTRY": "Performance Marketing",
+        "COMPANY SIZE": "85",
+        "ICP SCORE": "Team produces many paid social variants but no explicit budget authority confirmed.",
+        "LOCATION": "New York",
+        "HQ COMPANY LOCATION": "New York",
+        "INTERACTION": "commented",
+        "POST URL": "https://linkedin.com/posts/example-performance-comment"
+      },
+      "expected": {
+        "routing": "review",
+        "min_score": 60,
+        "max_score": 69
+      }
+    },
+    {
+      "case_id": "seedance-disqualified-002",
+      "description": "Freelancer creative with no commercial scale",
+      "lead": {
+        "lead_id": "seedance-disqualified-002",
+        "person_name": "Sam Rivera",
+        "title": "Freelance Motion Designer",
+        "company_name": "Sam Rivera Creative",
+        "company_domain": "samriveracreative.example",
+        "company_size": "1",
+        "linkedin_url": "https://linkedin.com/in/sam-rivera",
+        "signal_text": "Sam Rivera (Freelance Motion Designer at Sam Rivera Creative) liked a LinkedIn post about AI video generation. Trigify qualification note: Solo freelancer exploring tools, no team or buying committee indicated. Company details - industry: Freelance Design, company size: 1 employees, location: Madrid.",
+        "signal_type": "linkedin_engagement",
+        "signal_timestamp": "2026-05-11T00:00:00+00:00"
+      },
+      "raw_row": {
+        "INDUSTRY": "Freelance Design",
+        "COMPANY SIZE": "1",
+        "ICP SCORE": "Solo freelancer exploring tools, no team or buying committee indicated.",
+        "LOCATION": "Madrid",
+        "HQ COMPANY LOCATION": "Madrid",
+        "INTERACTION": "liked",
+        "POST URL": "https://linkedin.com/posts/example-freelance-like"
+      },
+      "expected": {
+        "routing": "disqualified",
+        "max_score": 59
+      }
+    }
+  ]
+}

@@ -1,0 +1,793 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+4 0 obj
+<< /Type /Pages /Kids [6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R] /Count 11 >>
+endobj
+5 0 obj
+<< /Length 4029 >>
+stream
+BT /F3 24 Tf 1 0 0 1 50 792 Tm (Cortex Architecture&#x20;) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 758 Tm (Purpose) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 730 Tm (This document explains the architecture of the lead generation engine as a complete) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 716 Tm (system.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 698 Tm (The platform is designed to turn noisy outbound lead signals into a ranked, auditable,) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 684 Tm (campaign-aware decision workflow. It combines deterministic Python orchestration,) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 670 Tm (lightweight enrichment, two-stage LLM reasoning, authoritative routing rules,) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 656 Tm (persistent memory, and an operator-facing web layer.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 638 Tm (At a high level, the system is built around one core principle:) Tj ET
+BT /F1 11 Tf 1 0 0 1 64 620 Tm (The LLM is the reasoning engine. Python is the control plane.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 602 Tm (That means the model is responsible for interpretation and scoring suggestions, while) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 588 Tm (the application remains responsible for workflow, validation, routing, storage,) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 574 Tm (auditability, and safety.) Tj ET
+50 556 m 545 556 l S
+BT /F3 18 Tf 1 0 0 1 50 540 Tm (Executive Summary) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 512 Tm (The system has five major layers:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 494 Tm (1.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 494 Tm (Input and normalization) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 476 Tm (2.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 476 Tm (Enrichment and context assembly) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 458 Tm (3.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 458 Tm (Two-stage LLM reasoning) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 440 Tm (4.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 440 Tm (Deterministic routing and output generation) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 422 Tm (5.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 422 Tm (Persistence, memory, and operator workflows) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 404 Tm (These layers work together to support two complementary operating models:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 386 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 386 Tm (a batch lead qualification pipeline for uploaded CSV or JSON lead sets) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 368 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 368 Tm (an interactive operator platform for profiling, review, campaign management, and) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 354 Tm (historical memory access) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 336 Tm (The result is a hybrid architecture that is neither a pure rules engine nor a pure) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 322 Tm (autonomous agent. It is a controlled reasoning platform with explicit guardrails.) Tj ET
+50 304 m 545 304 l S
+BT /F3 18 Tf 1 0 0 1 50 288 Tm (System Overview) Tj ET
+BT /F3 11 Tf 1 0 0 1 50 260 Tm (mermaid diagram/source) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 242 Tm (flowchart TD) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 230 Tm (A[Lead Input\\nCSV or JSON] --> B[Normalization]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 218 Tm (B --> C[Extensible Enrichment Layer]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 206 Tm (C --> D[Campaign Context Assembly]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 194 Tm (D --> E[Stage 1 LLM\\nEvidence Extraction]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 182 Tm (E --> F[Stage 2 LLM\\nQualification Decision]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 170 Tm (F --> G[Deterministic Python Routing]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 158 Tm (G --> H[Output Generation\\nCSV + JSON Artifacts]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 146 Tm (H --> I[Persistence + Memory Updates]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 134 Tm (I --> J[Operator APIs + Web UI]) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 122 Tm ( ) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 110 Tm (C1[Apollo Integration] --> C) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 98 Tm (C2[Website + Public Profile Enrichment] --> C) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 86 Tm (C3[Future Plug-ins\\nClay and Other Providers] --> C) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 74 Tm (K[Campaign Knowledge Base] --> D) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 62 Tm (L[Scoring Rules + Thresholds] --> F) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 5 0 R >>
+endobj
+7 0 obj
+<< /Length 4000 >>
+stream
+BT /F2 9 Tf 1 0 0 1 62 792 Tm (L --> G) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 780 Tm (M[Historical Memory] --> J) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 762 Tm (The architecture separates concerns very deliberately:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 744 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 744 Tm (normalization makes raw data usable) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 726 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 726 Tm (enrichment adds external, heuristic, and provider-based context) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 708 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 708 Tm (campaign context supplies business rules) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 690 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 690 Tm (Stage 1 extracts evidence) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 672 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 672 Tm (Stage 2 converts evidence into scored judgment) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 654 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 654 Tm (deterministic routing enforces authoritative outcomes) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 636 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 636 Tm (persistence keeps every run inspectable and reusable) Tj ET
+50 618 m 545 618 l S
+BT /F3 18 Tf 1 0 0 1 50 602 Tm (Architectural Principles) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 574 Tm (1. Separation Of Reasoning And Control) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 552 Tm (The platform does not allow the model to control the workflow. The model returns) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 538 Tm (structured outputs, but the application governs:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 520 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 520 Tm (orchestration) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 502 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 502 Tm (retries) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 484 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 484 Tm (timeouts) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 466 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 466 Tm (score integrity) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 448 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 448 Tm (routing authority) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 430 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 430 Tm (artifact writing) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 412 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 412 Tm (persistence) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 394 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 394 Tm (campaign activation) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 376 Tm (This reduces the risk of hidden behavior drift and makes the system easier to debug.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 358 Tm (2. Evidence Before Decision) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 336 Tm (The reasoning process is intentionally split into two steps:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 318 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 318 Tm (Stage 1 asks: "What do we know?") Tj ET
+BT /F1 11 Tf 1 0 0 1 50 300 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 300 Tm (Stage 2 asks: "Given what we know, how should we score this lead?") Tj ET
+BT /F1 11 Tf 1 0 0 1 50 282 Tm (This separation improves:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 264 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 264 Tm (explainability) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 246 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 246 Tm (prompt discipline) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 228 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 228 Tm (decision consistency) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 210 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 210 Tm (calibration) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 192 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 192 Tm (forensic review of false positives and false negatives) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 174 Tm (3. Campaign Context Is Externalized) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 152 Tm (Product knowledge, ICP rules, disqualifiers, and qualification logic are managed as) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 138 Tm (campaign assets rather than hard-coded into the scoring flow.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 120 Tm (This allows the same engine to support multiple products or go-to-market motions while) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 106 Tm (preserving campaign-specific logic.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 88 Tm (4. Policy Is Controlled, Memory Is Additive) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 66 Tm (The system is designed so that:) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 7 0 R >>
+endobj
+9 0 obj
+<< /Length 3809 >>
+stream
+BT /F1 11 Tf 1 0 0 1 50 792 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 792 Tm (memory can grow automatically) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 774 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 774 Tm (policy cannot change silently) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 756 Tm (Historical knowledge may help future workflows, but thresholds, disqualification) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 742 Tm (rules, scoring weights, and activation status remain explicitly controlled.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 724 Tm (5. Auditability Is A First-Class Requirement) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 702 Tm (Every processed lead should be reconstructable through stored artifacts and persistent) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 688 Tm (records. The system is built to support review, calibration, and debugging, not just) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 674 Tm (final output.) Tj ET
+50 656 m 545 656 l S
+BT /F3 18 Tf 1 0 0 1 50 640 Tm (Layered Architecture) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 612 Tm (1. Input Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 584 Tm (The system accepts lead batches in structured formats such as CSV and JSON.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 566 Tm (This layer is responsible for:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 548 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 548 Tm (receiving uploaded lead datasets) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 530 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 530 Tm (identifying format) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 512 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 512 Tm (preparing batches for downstream processing) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 494 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 494 Tm (supporting both operator-triggered and direct run execution) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 476 Tm (The input layer is intentionally simple. It does not try to reason about lead quality.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 462 Tm (Its role is to get data into the pipeline in a controlled way.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 444 Tm (2. Normalization Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 416 Tm (The normalization layer transforms noisy raw lead data into a consistent internal) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 402 Tm (schema.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 384 Tm (Its responsibilities include:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 366 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 366 Tm (field validation) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 348 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 348 Tm (text cleanup) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 330 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 330 Tm (domain normalization) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 312 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 312 Tm (LinkedIn URL cleanup) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 294 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 294 Tm (title standardization) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 276 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 276 Tm (duplicate filtering) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 258 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 258 Tm (invalid row rejection without failing the entire run) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 240 Tm (This layer protects every downstream component from format noise and malformed) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 226 Tm (records.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 208 Tm (Without this step, enrichment quality, LLM outputs, and routing decisions would become) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 194 Tm (inconsistent.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 176 Tm (3. Enrichment Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 148 Tm (Once a lead is normalized, the system enriches it with additional context.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 130 Tm (Enrichment combines:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 112 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 112 Tm (structured provider-based enrichment through Apollo) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 94 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 94 Tm (website summarization) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 76 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 76 Tm (public profile summarization) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 9 0 R >>
+endobj
+11 0 obj
+<< /Length 4004 >>
+stream
+BT /F1 11 Tf 1 0 0 1 50 792 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 792 Tm (role seniority heuristics) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 774 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 774 Tm (recent signal extraction where available) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 756 Tm (The enrichment layer is intentionally extensible.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 738 Tm (Today, Apollo acts as the primary structured enrichment provider and supplies) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 724 Tm (company-level context such as firmographic and commercial signals when available.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 706 Tm (Over time, this same layer can support additional plug-in providers without changing) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 692 Tm (the overall architecture. For example, Clay can be introduced later as another) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 678 Tm (enrichment source for structured firmographic, contact, intent, or workflow-specific) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 664 Tm (data.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 646 Tm (This means enrichment should be understood as a provider abstraction layer rather than) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 632 Tm (a single hard-wired integration.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 614 Tm (This layer is best-effort by design. The system continues even when external) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 600 Tm (enrichment is partial or missing.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 582 Tm (The purpose of enrichment is not to replace reasoning. It is to give the reasoning) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 568 Tm (engine a richer factual base.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 550 Tm (4. Campaign Context Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 522 Tm (The campaign context layer assembles the business logic that defines what "good" means) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 508 Tm (for a given campaign.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 490 Tm (Campaign context typically includes:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 472 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 472 Tm (product positioning) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 454 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 454 Tm (ideal customer profile) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 436 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 436 Tm (target personas) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 418 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 418 Tm (signal interpretation rules) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 400 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 400 Tm (qualification criteria) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 382 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 382 Tm (disqualification rules) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 364 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 364 Tm (scoring configuration) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 346 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 346 Tm (thresholds) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 328 Tm (This layer is what makes the engine campaign-aware rather than globally generic.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 310 Tm (Conceptually, the campaign context acts as a policy package injected into the) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 296 Tm (reasoning stages.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 278 Tm (5. Reasoning Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 250 Tm (The reasoning layer uses a two-stage LLM flow.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 232 Tm (Stage 1: Evidence Extraction) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 210 Tm (The first stage analyzes the normalized and enriched lead and produces a structured) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 196 Tm (evidence object.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 178 Tm (Typical outputs include:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 160 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 160 Tm (segment classification) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 142 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 142 Tm (possible use case) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 124 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 124 Tm (signal strength) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 106 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 106 Tm (observed evidence) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 88 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 88 Tm (inferred evidence) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 70 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 70 Tm (unknowns) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 11 0 R >>
+endobj
+13 0 obj
+<< /Length 3860 >>
+stream
+BT /F1 11 Tf 1 0 0 1 50 792 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 792 Tm (hard disqualifiers) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 774 Tm (This stage is explicitly not allowed to make the final qualification call.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 756 Tm (Its only job is to extract and structure the evidence base.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 738 Tm (Stage 2: Qualification Decision) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 716 Tm (The second stage receives only the Stage 1 evidence object.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 698 Tm (It then produces:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 680 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 680 Tm (decision suggestion) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 662 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 662 Tm (total score) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 644 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 644 Tm (factor-level sub-scores) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 626 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 626 Tm (confidence level) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 608 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 608 Tm (qualification reasons) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 590 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 590 Tm (disqualification reasons) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 572 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 572 Tm (short reasoning summary) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 554 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 554 Tm (suggested use case) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 536 Tm (Because Stage 2 works from structured evidence rather than raw input, the system keeps) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 522 Tm (the scoring task narrower and more disciplined.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 504 Tm (6. Deterministic Control Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 476 Tm (This is the trust layer of the system.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 458 Tm (After the model returns a decision object, the application performs deterministic) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 444 Tm (enforcement such as:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 426 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 426 Tm (sub-score clamping) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 408 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 408 Tm (score recomputation) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 390 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 390 Tm (threshold alignment) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 372 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 372 Tm (hard disqualifier overrides) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 354 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 354 Tm (low-signal overrides) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 336 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 336 Tm (final authoritative routing) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 318 Tm (This layer ensures that final outcomes always follow the platform's explicit rules,) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 304 Tm (even if the model output is imperfect.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 286 Tm (The platform therefore treats model output as a structured proposal, not as the final) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 272 Tm (source of truth.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 254 Tm (7. Output Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 226 Tm (Once routing is finalized, the system writes:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 208 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 208 Tm (queue-oriented CSV outputs for qualified, review, and disqualified leads) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 190 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 190 Tm (per-lead JSON artifacts for audit and inspection) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 172 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 172 Tm (run logs) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 154 Tm (This layer serves both operational and analytical purposes.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 136 Tm (Operationally, it creates action queues.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 118 Tm (Analytically, it preserves exactly what entered the pipeline, what was inferred, what) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 104 Tm (was scored, and how the final routing was determined.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 86 Tm (8. Persistence And Memory Layer) Tj ET
+endstream
+endobj
+14 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 13 0 R >>
+endobj
+15 0 obj
+<< /Length 3616 >>
+stream
+BT /F1 11 Tf 1 0 0 1 50 792 Tm (The persistence layer stores both run results and longer-lived memory.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 774 Tm (It supports:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 756 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 756 Tm (run metadata) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 738 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 738 Tm (scored lead results) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 720 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 720 Tm (campaign metadata) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 702 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 702 Tm (exclusions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 684 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 684 Tm (templates) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 666 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 666 Tm (company profiles) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 648 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 648 Tm (person profiles) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 630 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 630 Tm (append-only lead memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 612 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 612 Tm (human review feedback) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 594 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 594 Tm (campaign versions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 576 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 576 Tm (policy versions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 558 Tm (This layer turns the engine from a stateless batch tool into an accumulating outbound) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 544 Tm (intelligence system.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 526 Tm (9. Operator And API Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 498 Tm (The operator layer exposes the system through a web interface and service endpoints.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 480 Tm (It supports workflows such as:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 462 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 462 Tm (uploading new lead batches) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 444 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 444 Tm (monitoring live run progress) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 426 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 426 Tm (reviewing scored leads) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 408 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 408 Tm (inspecting artifacts) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 390 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 390 Tm (profiling companies) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 372 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 372 Tm (profiling people) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 354 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 354 Tm (evaluating fit on demand) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 336 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 336 Tm (recording review feedback) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 318 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 318 Tm (managing campaign versions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 300 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 300 Tm (managing policy versions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 282 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 282 Tm (exporting downstream actions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 264 Tm (This layer is the human-facing control plane for the platform.) Tj ET
+50 246 m 545 246 l S
+BT /F3 18 Tf 1 0 0 1 50 230 Tm (End-To-End Processing Flow) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 202 Tm (Batch Qualification Flow) Tj ET
+BT /F3 11 Tf 1 0 0 1 50 174 Tm (mermaid diagram/source) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 156 Tm (sequenceDiagram) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 144 Tm (participant User) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 132 Tm (participant Operator Layer) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 120 Tm (participant Pipeline) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 108 Tm (participant LLM) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 96 Tm (participant Storage) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 84 Tm ( ) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 72 Tm (User->>Operator Layer: Upload lead batch and select campaign) Tj ET
+endstream
+endobj
+16 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 15 0 R >>
+endobj
+17 0 obj
+<< /Length 3717 >>
+stream
+BT /F2 9 Tf 1 0 0 1 62 792 Tm (Operator Layer->>Storage: Create run record) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 780 Tm (Operator Layer->>Pipeline: Start run) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 768 Tm (Pipeline->>Pipeline: Normalize leads) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 756 Tm (Pipeline->>Pipeline: Enrich leads) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 744 Tm (Pipeline->>LLM: Stage 1 evidence extraction) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 732 Tm (LLM-->>Pipeline: Evidence JSON) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 720 Tm (Pipeline->>LLM: Stage 2 qualification decision) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 708 Tm (LLM-->>Pipeline: Decision JSON) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 696 Tm (Pipeline->>Pipeline: Enforce deterministic routing) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 684 Tm (Pipeline->>Pipeline: Write outputs and artifacts) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 672 Tm (Pipeline->>Storage: Persist leads and memory) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 660 Tm (Operator Layer-->>User: Show run status and results) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 642 Tm (Interactive Profiling Flow) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 614 Tm (The system also supports entity-level evaluation outside a batch upload.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 596 Tm (In this mode:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 578 Tm (1.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 578 Tm (an operator provides a company, person, or both) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 560 Tm (2.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 560 Tm (the platform builds a synthetic lead context) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 542 Tm (3.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 542 Tm (normalization and enrichment run as usual) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 524 Tm (4.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 524 Tm (the two-stage reasoning process runs) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 506 Tm (5.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 506 Tm (deterministic routing finalizes the verdict) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 488 Tm (6.) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 488 Tm (historical memory may be retrieved to support interpretation) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 470 Tm (This makes the same scoring kernel reusable for interactive account research and fit) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 456 Tm (assessment.) Tj ET
+50 438 m 545 438 l S
+BT /F3 18 Tf 1 0 0 1 50 422 Tm (Component Responsibilities) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 394 Tm (Ingestion And Run Management) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 366 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 348 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 348 Tm (receive uploads) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 330 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 330 Tm (create run records) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 312 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 312 Tm (isolate run state) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 294 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 294 Tm (stream progress) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 276 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 276 Tm (trigger batch execution) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 258 Tm (Normalization) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 230 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 212 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 212 Tm (transform raw lead formats into one schema) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 194 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 194 Tm (clean and standardize fields) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 176 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 176 Tm (reject invalid records safely) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 158 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 158 Tm (deduplicate leads) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 140 Tm (Enrichment) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 112 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 94 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 94 Tm (gather auxiliary firmographic and profile data) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 76 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 76 Tm (summarize public sources) Tj ET
+endstream
+endobj
+18 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 17 0 R >>
+endobj
+19 0 obj
+<< /Length 3479 >>
+stream
+BT /F1 11 Tf 1 0 0 1 50 792 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 792 Tm (derive lightweight local heuristics) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 774 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 774 Tm (fail gracefully when data is sparse) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 756 Tm (Campaign Context) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 728 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 710 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 710 Tm (define campaign-specific business logic) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 692 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 692 Tm (assemble reusable prompt context) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 674 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 674 Tm (separate common logic from campaign-specific logic) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 656 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 656 Tm (keep policy portable across products) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 638 Tm (LLM Reasoning) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 610 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 592 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 592 Tm (structure evidence) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 574 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 574 Tm (score fit) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 556 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 556 Tm (explain reasoning) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 538 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 538 Tm (produce machine-readable outputs) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 520 Tm (Deterministic Enforcement) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 492 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 474 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 474 Tm (validate model outputs) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 456 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 456 Tm (clamp scores) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 438 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 438 Tm (recompute totals) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 420 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 420 Tm (apply overrides) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 402 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 402 Tm (finalize routing) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 384 Tm (Persistence And Memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 356 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 338 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 338 Tm (store run history) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 320 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 320 Tm (store scored lead summaries) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 302 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 302 Tm (preserve evidence snapshots) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 284 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 284 Tm (maintain company memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 266 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 266 Tm (maintain person memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 248 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 248 Tm (capture reviewer corrections) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 230 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 230 Tm (version campaign and policy state) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 212 Tm (Operator Layer) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 184 Tm (Responsibilities:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 166 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 166 Tm (expose workflows to users) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 148 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 148 Tm (provide run inspection) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 130 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 130 Tm (support profiling and search) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 112 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 112 Tm (support campaign operations) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 94 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 94 Tm (support review and downstream actions) Tj ET
+50 76 m 545 76 l S
+endstream
+endobj
+20 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 19 0 R >>
+endobj
+21 0 obj
+<< /Length 3479 >>
+stream
+BT /F3 18 Tf 1 0 0 1 50 792 Tm (Data Model Concept) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 764 Tm (The platform stores two broad categories of information.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 746 Tm (1. Operational Data) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 718 Tm (This includes:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 700 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 700 Tm (runs) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 682 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 682 Tm (lead results) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 664 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 664 Tm (exclusions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 646 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 646 Tm (templates) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 628 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 628 Tm (campaign registry entries) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 610 Tm (Operational data answers questions like:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 592 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 592 Tm (what was processed) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 574 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 574 Tm (when it ran) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 556 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 556 Tm (what the result was) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 538 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 538 Tm (what downstream actions are available) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 520 Tm (2. Memory Data) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 492 Tm (This includes:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 474 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 474 Tm (company-level memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 456 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 456 Tm (person-level memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 438 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 438 Tm (lead-level historical snapshots) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 420 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 420 Tm (reviewer feedback) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 402 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 402 Tm (campaign versions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 384 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 384 Tm (policy versions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 366 Tm (Memory data answers questions like:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 348 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 348 Tm (have we seen this company before) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 330 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 330 Tm (has this person been evaluated before) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 312 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 312 Tm (how often has this entity qualified) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 294 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 294 Tm (what did reviewers correct historically) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 276 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 276 Tm (what policy version governed earlier decisions) Tj ET
+50 258 m 545 258 l S
+BT /F3 18 Tf 1 0 0 1 50 242 Tm (Guardrails) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 214 Tm (The architecture relies on guardrails to remain stable over time.) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 196 Tm (Score Guardrails) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 168 Tm (The system enforces:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 150 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 150 Tm (valid score ranges) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 132 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 132 Tm (sum consistency between total and sub-scores) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 114 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 114 Tm (threshold-consistent decisions) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 96 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 96 Tm (deterministic overrides for hard disqualifiers) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 78 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 78 Tm (deterministic overrides for very weak signals) Tj ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 21 0 R >>
+endobj
+23 0 obj
+<< /Length 3520 >>
+stream
+BT /F3 18 Tf 1 0 0 1 50 792 Tm (Policy Guardrails) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 764 Tm (The system is designed so that:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 746 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 746 Tm (scoring thresholds are controlled) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 728 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 728 Tm (score weights are controlled) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 710 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 710 Tm (disqualification logic is controlled) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 692 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 692 Tm (campaign activation is controlled) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 674 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 674 Tm (version changes can be approved intentionally) Tj ET
+BT /F3 18 Tf 1 0 0 1 50 656 Tm (Memory Guardrails) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 628 Tm (The system treats memory as support, not as unquestioned truth.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 610 Tm (Memory should:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 592 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 592 Tm (preserve source snapshots) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 574 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 574 Tm (remain attributable) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 556 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 556 Tm (remain timestamped) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 538 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 538 Tm (help with context and review) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 520 Tm (Memory should not:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 502 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 502 Tm (silently redefine policy) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 484 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 484 Tm (override explicit current evidence without review) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 466 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 466 Tm (mutate scoring rules on its own) Tj ET
+50 448 m 545 448 l S
+BT /F3 18 Tf 1 0 0 1 50 432 Tm (Why This Architecture Works) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 404 Tm (This architecture works well because it balances three competing needs:) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 386 Tm (1. Flexibility) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 364 Tm (The system can adapt to multiple campaigns, products, and go-to-market motions through) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 350 Tm (externalized context and policy packaging.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 332 Tm (2. Consistency) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 310 Tm (Deterministic control ensures that the same scoring framework is enforced every time,) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 296 Tm (regardless of small model variations.) Tj ET
+BT /F3 14 Tf 1 0 0 1 50 278 Tm (3. Learnability) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 256 Tm (Persistent memory, feedback capture, and full artifacts allow the system to improve) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 242 Tm (operational usefulness over time without requiring hidden autonomous behavior.) Tj ET
+50 224 m 545 224 l S
+BT /F3 18 Tf 1 0 0 1 50 208 Tm (Current State) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 180 Tm (Today, the platform already supports:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 162 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 162 Tm (batch lead ingestion) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 144 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 144 Tm (normalization and deduplication) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 126 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 126 Tm (enrichment) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 108 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 108 Tm (two-stage LLM scoring) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 90 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 90 Tm (deterministic routing) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 72 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 72 Tm (CSV outputs and JSON artifacts) Tj ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 23 0 R >>
+endobj
+25 0 obj
+<< /Length 3628 >>
+stream
+BT /F1 11 Tf 1 0 0 1 50 792 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 792 Tm (web-based run management) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 774 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 774 Tm (persistent storage) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 756 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 756 Tm (company and person memory) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 738 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 738 Tm (review feedback capture) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 720 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 720 Tm (campaign and policy version records) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 702 Tm (This means the architecture is already beyond a prototype script. It is a structured) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 688 Tm (outbound decision platform with memory and operator workflows.) Tj ET
+50 670 m 545 670 l S
+BT /F3 18 Tf 1 0 0 1 50 654 Tm (Recommended Mental Model) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 626 Tm (The simplest way to understand the whole architecture is:) Tj ET
+BT /F3 11 Tf 1 0 0 1 50 608 Tm (text diagram/source) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 590 Tm (Input) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 578 Tm (-> Normalize) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 566 Tm (-> Enrich) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 554 Tm (-> Explain) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 542 Tm (-> Score) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 530 Tm (-> Enforce) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 518 Tm (-> Persist) Tj ET
+BT /F2 9 Tf 1 0 0 1 62 506 Tm (-> Operate) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 488 Tm (Or in platform terms:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 470 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 470 Tm (the intake layer receives data) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 452 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 452 Tm (the context layer defines what good looks like) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 434 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 434 Tm (the reasoning layer interprets the lead) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 416 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 416 Tm (the control layer enforces truth) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 398 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 398 Tm (the memory layer remembers what happened) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 380 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 380 Tm (the operator layer makes the system usable by humans) Tj ET
+50 362 m 545 362 l S
+BT /F3 18 Tf 1 0 0 1 50 346 Tm (Final Summary) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 318 Tm (This platform is a campaign-aware lead qualification architecture built around) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 304 Tm (controlled LLM reasoning.) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 286 Tm (Its defining characteristics are:) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 268 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 268 Tm (two-stage reasoning instead of one-step scoring) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 250 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 250 Tm (deterministic enforcement instead of model-owned routing) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 232 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 232 Tm (externalized campaign logic instead of hard-coded business rules) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 214 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 214 Tm (persistent memory instead of stateless runs) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 196 Tm (-) Tj ET
+BT /F1 11 Tf 1 0 0 1 68 196 Tm (operator workflows instead of raw pipeline output only) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 178 Tm (In practical terms, it is best understood as:) Tj ET
+BT /F1 11 Tf 1 0 0 1 64 160 Tm (a deterministic outbound decision engine wrapped in a memory-backed operator) Tj ET
+BT /F1 11 Tf 1 0 0 1 64 146 Tm (platform) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 128 Tm (That is the architectural core of the system today, and it is also the correct) Tj ET
+BT /F1 11 Tf 1 0 0 1 50 114 Tm (foundation for the more agentic version planned next.) Tj ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 4 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> /Contents 25 0 R >>
+endobj
+27 0 obj
+<< /Type /Catalog /Pages 4 0 R >>
+endobj
+xref
+0 28
+0000000000 65535 f 
+0000000015 00000 n 
+0000000085 00000 n 
+0000000153 00000 n 
+0000000228 00000 n 
+0000000355 00000 n 
+0000004435 00000 n 
+0000004581 00000 n 
+0000008632 00000 n 
+0000008778 00000 n 
+0000012638 00000 n 
+0000012785 00000 n 
+0000016841 00000 n 
+0000016989 00000 n 
+0000020901 00000 n 
+0000021049 00000 n 
+0000024717 00000 n 
+0000024865 00000 n 
+0000028634 00000 n 
+0000028782 00000 n 
+0000032313 00000 n 
+0000032461 00000 n 
+0000035992 00000 n 
+0000036140 00000 n 
+0000039712 00000 n 
+0000039860 00000 n 
+0000043540 00000 n 
+0000043688 00000 n 
+trailer
+<< /Size 28 /Root 27 0 R >>
+startxref
+43738
+%EOF

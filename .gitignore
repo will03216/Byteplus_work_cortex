@@ -13,3 +13,16 @@ __pycache__/
 output/runs/
 *.csv
 *.log
+
+# Skill release artifacts
+dist/
+
+# Lead Gen Cortex skill generated runtime outputs
+.trae/skills/lead-gen-cortex-operator/benchmark_reports/
+.trae/skills/lead-gen-cortex-operator/**/*.csv
+.trae/skills/lead-gen-cortex-operator/**/summary.json
+.trae/skills/lead-gen-cortex-operator/**/quality_report.json
+.trae/skills/lead-gen-cortex-operator/**/run_manifest.json
+.trae/skills/lead-gen-cortex-operator/**/config_snapshot.json
+.trae/skills/lead-gen-cortex-operator/**/errors.csv
+.trae/skills/lead-gen-cortex-operator/**/artifacts/
