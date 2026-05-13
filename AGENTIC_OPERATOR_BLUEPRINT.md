@@ -218,8 +218,32 @@ Suggested fields:
 - `latest_fit_by_campaign` JSONB
 - `first_seen_at`
 - `last_seen_at`
+- `last_enriched_at`
 - `times_seen`
 - `last_run_id`
+
+Note: `latest_structured_profile` stores the current enrichment snapshot only. Historical events must go into `company_signals`, not this column.
+
+### 1a. `company_signals`
+
+Purpose:
+
+- append-only time-series of events per company
+- preserves signal history across re-enrichments — a funding round from three months ago must not be overwritten when the profile is refreshed
+
+Suggested fields:
+
+- `id`
+- `domain` (FK to `company_profiles.canonical_domain`)
+- `signal_type` — one of: `funding_round`, `ai_hiring`, `product_launch`, `news_mention`, `job_posting`, `tech_stack_change`, `outreach_reply`, `meeting_booked`
+- `headline`
+- `source_url`
+- `source` — one of: `apollo`, `tavily`, `instantly_webhook`, `manual`
+- `occurred_at` — when the event happened (not when it was captured)
+- `captured_at`
+- `enrichment_run_id`
+
+This table is write-once. Never update or delete rows. Queries for meeting prep and profile views read from this table, not from `latest_structured_profile`.
 
 ### 2. `person_profiles`
 
@@ -361,6 +385,83 @@ Suggested fields:
 - `created_at`
 
 If using PostgreSQL, use `pgvector`.
+
+## Entity Resolution
+
+Before any company or person is upserted into the entity store, it must pass through entity resolution to prevent fragmented records.
+
+### Company Resolution
+
+1. Normalize the domain: strip `www.`, lowercase, extract root domain (e.g. `www.ByteDance.com` → `bytedance.com`)
+2. Look up `company_profiles` by `canonical_domain` — if found, update in place
+3. If no domain match, fuzzy-match `normalized_company_name` against existing records (Levenshtein distance ≤ 2 or token-sort ratio ≥ 90)
+4. If still no match, create a new record
+
+### Person Resolution
+
+1. Normalize: lowercase name, strip honorifics and suffixes
+2. Look up `person_profiles` by `linkedin_url` — this is the stable primary key
+3. If no LinkedIn URL, fuzzy-match on `(normalized_person_name, company_profile_id)` pair
+4. If found via fuzzy match, update `latest_title` and `last_seen_at`; do not overwrite historical data
+5. If not found, create a new record
+
+Deduplication must run before any upsert. Skipping it causes the entity store to fragment into multiple records per company and renders aggregate history queries unreliable.
+
+## Signal Refresh Model
+
+Company profiles become stale. Enrichment data from six months ago is wrong: funding stage changes, headcount changes, key contacts move on. The system must proactively refresh profiles, not only enrich on ingestion.
+
+### Staleness TTL
+
+- Company profile (Apollo + website summary): refresh if `last_enriched_at` is older than 30 days
+- Company signals (news, job postings): refresh if `last_enriched_at` is older than 7 days
+- Person profile (title, seniority): refresh if `last_seen_at` is older than 60 days
+
+### Refresh Trigger Sources
+
+- **Scheduled job**: a background task (cron or async worker) queries `company_profiles` where `last_enriched_at < now() - interval` and re-enriches the batch
+- **On-demand**: meeting prep requests always check staleness and re-enrich before generating the deck if the profile is stale
+- **Event-triggered**: an Instantly webhook delivering a reply or bounce for a domain triggers immediate re-enrichment of that company's signals
+
+### Hot-Lead Flagging
+
+When a refresh detects a new high-value signal (funding round, AI hiring spike, product launch), write a `company_signals` row with the appropriate `signal_type`. A flag column `is_hot` on `company_profiles` can be set to true and cleared by an AE after review.
+
+## Outcome Memory Pipeline
+
+The highest-value learning signal is downstream outreach outcome — whether an email was replied to, a meeting was booked, or a deal was won or lost. This data lives in Instantly.ai and must flow back into the entity store automatically.
+
+### Instantly Webhook → `company_signals`
+
+Configure an Instantly webhook endpoint (`POST /api/webhooks/instantly`) that receives reply, bounce, and open events. On receipt:
+
+1. Extract the lead email domain
+2. Resolve to `canonical_domain` via entity resolution
+3. Write a `company_signals` row:
+   - `signal_type`: `outreach_reply`, `outreach_bounce`, or `meeting_booked`
+   - `source`: `instantly_webhook`
+   - `occurred_at`: event timestamp from Instantly payload
+4. Write a `review_feedback` row linking `lead_id`, `campaign_id`, and `feedback_type`
+
+### AE-Entered Outcomes
+
+AEs must be able to attach a note to any company or lead from the UI. Supported entries:
+
+- Won / Lost (with competitor name if lost)
+- No fit (with reason: wrong persona, wrong segment, poor timing, budget)
+- Meeting booked (with attendees)
+- Custom note with free text
+
+These write to `review_feedback` and also append a `company_signals` row with `source = manual`.
+
+### What This Enables
+
+Once outcome data flows back, the system can:
+
+- surface reply rate by segment in the analytics view
+- weight similar-company retrieval toward historically responsive profiles
+- identify false-positive clusters (high score, low reply rate) for prompt calibration
+- feed labeled examples into the campaign evaluation harness
 
 ## Memory Strategy
 
