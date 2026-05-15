@@ -13,3 +13,4 @@ python-multipart>=0.0.9
 asyncpg>=0.29.0
 itsdangerous>=2.1.0
 starlette>=0.37.0
+mcp>=1.0.0

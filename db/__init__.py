@@ -60,6 +60,10 @@ from .store import (
     get_active_policy_version,
     get_policy_version,
     activate_policy_version,
+    write_company_signals,
+    get_company_signals,
+    get_company_memory,
+    list_lead_memory_for_person,
 )
 
 __all__ = [
@@ -83,4 +87,5 @@ __all__ = [
     "add_review_feedback", "list_review_feedback",
     "create_campaign_version", "list_campaign_versions", "get_active_campaign_version", "get_campaign_version", "activate_campaign_version",
     "create_policy_version", "list_policy_versions", "get_active_policy_version", "get_policy_version", "activate_policy_version",
+    "write_company_signals", "get_company_signals", "get_company_memory", "list_lead_memory_for_person",
 ]

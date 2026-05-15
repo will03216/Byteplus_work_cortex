@@ -223,6 +223,20 @@ CREATE TABLE IF NOT EXISTS policy_versions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_policy_versions_unique
     ON policy_versions(campaign_id, policy_version);
+
+CREATE TABLE IF NOT EXISTS company_signals (
+    id                SERIAL      PRIMARY KEY,
+    domain            TEXT        NOT NULL,
+    signal_type       TEXT        NOT NULL,
+    headline          TEXT        NOT NULL,
+    source_url        TEXT,
+    source            TEXT        NOT NULL,
+    occurred_at       TIMESTAMPTZ NOT NULL,
+    captured_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enrichment_run_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_company_signals_domain_occurred
+    ON company_signals(domain, occurred_at DESC);
 """
 
 
@@ -277,6 +291,12 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("UPDATE runs SET campaign_id = 'seedance' WHERE campaign_id IS NULL")
         await conn.execute("UPDATE exclusions SET campaign_id = 'seedance' WHERE campaign_id IS NULL")
         await conn.execute("UPDATE email_templates SET campaign_id = 'seedance' WHERE campaign_id IS NULL")
+        # Entity store: new columns on company_profiles
+        await conn.execute("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS is_hot BOOLEAN NOT NULL DEFAULT FALSE")
+        await conn.execute("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS last_enriched_at TIMESTAMPTZ")
+        # review_feedback: make lead_id and campaign_id nullable for webhook events without context
+        await conn.execute("ALTER TABLE review_feedback ALTER COLUMN lead_id DROP NOT NULL")
+        await conn.execute("ALTER TABLE review_feedback ALTER COLUMN campaign_id DROP NOT NULL")
 
 
 async def mark_stale_runs(pool: asyncpg.Pool) -> None:
@@ -581,8 +601,10 @@ def _row_to_company_profile(row: asyncpg.Record) -> dict:
         "latest_structured_profile": row["latest_structured_profile"] or {},
         "latest_summary": row["latest_summary"] or "",
         "latest_fit_by_campaign": row["latest_fit_by_campaign"] or {},
+        "is_hot": row["is_hot"] if "is_hot" in row.keys() else False,
         "first_seen_at": row["first_seen_at"].isoformat() if row["first_seen_at"] else None,
         "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
+        "last_enriched_at": row["last_enriched_at"].isoformat() if row.get("last_enriched_at") else None,
         "times_seen": row["times_seen"] or 0,
         "last_run_id": row["last_run_id"],
     }
@@ -1878,4 +1900,174 @@ async def delete_campaign(pool: asyncpg.Pool, campaign_id: str) -> None:
     await pool.execute("DELETE FROM campaign_settings WHERE campaign_id = $1", campaign_id)
     await pool.execute("DELETE FROM exclusions WHERE campaign_id = $1", campaign_id)
     await pool.execute("DELETE FROM email_templates WHERE campaign_id = $1", campaign_id)
+
+
+# ── Company signals ───────────────────────────────────────────────────────────
+
+async def write_company_signals(
+    pool: asyncpg.Pool,
+    domain: str,
+    signals: list[dict],
+) -> None:
+    """Bulk-insert append-only signal events for a company. Never updates existing rows."""
+    if not domain or not signals:
+        return
+    rows = []
+    for s in signals:
+        headline = (s.get("headline") or "").strip()
+        if not headline:
+            continue
+        occurred = s.get("occurred_at")
+        if isinstance(occurred, str):
+            from datetime import datetime, timezone
+            try:
+                occurred = datetime.fromisoformat(occurred.replace("Z", "+00:00"))
+            except ValueError:
+                occurred = datetime.now(timezone.utc)
+        elif occurred is None:
+            from datetime import datetime, timezone
+            occurred = datetime.now(timezone.utc)
+        rows.append((
+            domain,
+            (s.get("signal_type") or "news_mention").strip(),
+            headline,
+            s.get("source_url") or None,
+            (s.get("source") or "manual").strip(),
+            occurred,
+            s.get("enrichment_run_id") or None,
+        ))
+    if not rows:
+        return
+    try:
+        await pool.executemany(
+            """INSERT INTO company_signals
+               (domain, signal_type, headline, source_url, source, occurred_at, enrichment_run_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+            rows,
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("write_company_signals failed for domain=%s: %s", domain, exc)
+
+
+async def get_company_signals(
+    pool: asyncpg.Pool,
+    domain: str,
+    limit: int = 50,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """SELECT id, domain, signal_type, headline, source_url, source,
+                  occurred_at, captured_at, enrichment_run_id
+             FROM company_signals
+            WHERE domain = $1
+            ORDER BY occurred_at DESC
+            LIMIT $2""",
+        domain, max(1, limit),
+    )
+    return [
+        {
+            "id": r["id"],
+            "domain": r["domain"],
+            "signal_type": r["signal_type"],
+            "headline": r["headline"],
+            "source_url": r["source_url"],
+            "source": r["source"],
+            "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] else None,
+            "captured_at": r["captured_at"].isoformat() if r["captured_at"] else None,
+            "enrichment_run_id": r["enrichment_run_id"],
+        }
+        for r in rows
+    ]
+
+
+async def get_company_memory(
+    pool: asyncpg.Pool,
+    domain: str,
+) -> Optional[dict]:
+    """Return full account intelligence bundle for a domain: profile + signals + lead history + feedback."""
+    profile = await get_company_profile_by_domain(pool, domain)
+    if profile is None:
+        return None
+
+    canonical = profile.get("canonical_domain") or domain
+    profile_id = profile.get("id")
+
+    signals = await get_company_signals(pool, canonical, limit=50)
+
+    lead_history = []
+    if profile_id:
+        rows = await pool.fetch(
+            """SELECT id, run_id, lead_id, campaign_id, routing, created_at
+                 FROM lead_memory
+                WHERE company_profile_id = $1
+                ORDER BY created_at DESC
+                LIMIT 10""",
+            profile_id,
+        )
+        lead_history = [
+            {
+                "id": r["id"],
+                "run_id": r["run_id"],
+                "lead_id": r["lead_id"],
+                "campaign_id": r["campaign_id"],
+                "routing": r["routing"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+
+    feedback = []
+    if profile_id:
+        rows = await pool.fetch(
+            """SELECT id, feedback_type, feedback_reason, fit_outcome, owner, created_at
+                 FROM review_feedback
+                WHERE company_profile_id = $1
+                ORDER BY created_at DESC
+                LIMIT 10""",
+            profile_id,
+        )
+        feedback = [
+            {
+                "id": r["id"],
+                "feedback_type": r["feedback_type"],
+                "feedback_reason": r["feedback_reason"],
+                "fit_outcome": r["fit_outcome"],
+                "owner": r["owner"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+
+    return {
+        "profile": profile,
+        "signals": signals,
+        "lead_history": lead_history,
+        "feedback": feedback,
+    }
+
+
+async def list_lead_memory_for_person(
+    pool: asyncpg.Pool,
+    person_profile_id: int,
+    limit: int = 10,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """SELECT id, run_id, lead_id, campaign_id, routing, created_at
+             FROM lead_memory
+            WHERE person_profile_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2""",
+        person_profile_id, max(1, limit),
+    )
+    return [
+        {
+            "id": r["id"],
+            "run_id": r["run_id"],
+            "lead_id": r["lead_id"],
+            "campaign_id": r["campaign_id"],
+            "routing": r["routing"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
     await pool.execute("DELETE FROM campaigns WHERE id = $1", campaign_id)

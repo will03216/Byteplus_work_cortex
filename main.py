@@ -16,9 +16,11 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,6 +28,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config
+import db as store
 from campaigns import load_all_campaigns, get_campaign, CampaignContext
 from llm import LiteLLMClient
 from normalization import normalize_batch, LeadInput
@@ -102,6 +105,8 @@ async def _run_lead_pipeline(
     output_dir: str,
     stats:      RunStats,
     campaign:   CampaignContext = None,
+    pool=None,
+    run_id:     str = "",
 ) -> None:
     """Inner pipeline steps for a single lead (no semaphore, no timeout — caller owns those)."""
     logger = logging.getLogger(__name__)
@@ -124,6 +129,64 @@ async def _run_lead_pipeline(
     # Write outputs
     await write_result(lead, enriched, evidence, decision, routing, output_dir)
 
+    # Entity store upsert — fire-and-forget, never blocks or fails the pipeline
+    if pool and run_id:
+        try:
+            cp = await store.upsert_company_profile(
+                pool,
+                lead.company_name,
+                lead.company_domain or "",
+                structured_profile=enriched.company_profile.model_dump(),
+                summary=(enriched.company_website_summary or "")[:500],
+                campaign_id=campaign.id if campaign else None,
+                fit_summary={
+                    "score": decision.score,
+                    "decision": routing,
+                    "segment_fit": decision.segment_fit,
+                    "buyer_fit": decision.buyer_fit,
+                },
+                run_id=run_id,
+            )
+            # Parse Apollo funding events into company_signals rows
+            signals = [
+                {
+                    "signal_type": "funding_round",
+                    "headline": activity,
+                    "source": "apollo",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                }
+                for activity in enriched.recent_signals.recent_activity
+                if activity.startswith("Funding:")
+            ]
+            if signals and cp.get("canonical_domain"):
+                await store.write_company_signals(pool, cp["canonical_domain"], signals)
+
+            pp = await store.upsert_person_profile(
+                pool,
+                lead.person_name,
+                linkedin_url=lead.linkedin_url or "",
+                company_profile_id=cp.get("id"),
+                title=lead.title,
+                campaign_id=campaign.id if campaign else None,
+                run_id=run_id,
+            )
+
+            await store.insert_lead_memory(
+                pool,
+                run_id=run_id,
+                lead_id=lead.lead_id,
+                campaign_id=campaign.id if campaign else "seedance",
+                routing=routing,
+                company_profile_id=cp.get("id"),
+                person_profile_id=pp.get("id") if pp else None,
+                raw_input=lead.model_dump(),
+                enrichment_snapshot=enriched.company_profile.model_dump(),
+                evidence_snapshot=evidence.model_dump(),
+                decision_snapshot=decision.model_dump(),
+            )
+        except Exception as exc:
+            logger.warning("Entity store upsert failed for lead_id=%s: %s", lead.lead_id, exc)
+
     stats.record(routing)
     logger.info(
         "✓ lead_id=%-20s | %-12s | score=%3d | %s",
@@ -138,6 +201,8 @@ async def process_lead(
     sem:        asyncio.Semaphore,
     stats:      RunStats,
     campaign:   CampaignContext = None,
+    pool=None,
+    run_id:     str = "",
 ) -> None:
     """Full pipeline for a single lead, bounded by semaphore and per-lead deadline."""
     logger = logging.getLogger(__name__)
@@ -145,7 +210,7 @@ async def process_lead(
     async with sem:
         try:
             await asyncio.wait_for(
-                _run_lead_pipeline(client, lead, output_dir, stats, campaign=campaign),
+                _run_lead_pipeline(client, lead, output_dir, stats, campaign=campaign, pool=pool, run_id=run_id),
                 timeout=config.LEAD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -178,7 +243,6 @@ async def run_batch(
     try:
         campaign = get_campaign(campaign_id)
     except ValueError:
-        import os
         database_url = os.getenv("DATABASE_URL")
         if not database_url:
             raise
@@ -249,11 +313,42 @@ async def run_batch(
         timeout_seconds = config.LLM_TIMEOUT_SECONDS,
     )
 
-    tasks = [
-        process_lead(client, lead, output_dir, sem, stats, campaign=campaign)
-        for lead in leads
-    ]
-    await asyncio.gather(*tasks, return_exceptions=False)
+    # Entity store pool — created only when DATABASE_URL is set; silently skipped otherwise
+    import uuid as _uuid
+    run_id = str(_uuid.uuid4())
+    db_pool = None
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        try:
+            import json as _json
+            import asyncpg as _asyncpg
+
+            async def _init_conn(conn):
+                await conn.set_type_codec("jsonb", encoder=_json.dumps, decoder=_json.loads, schema="pg_catalog")
+
+            db_pool = await _asyncpg.create_pool(database_url, init=_init_conn, min_size=1, max_size=3)
+            await store.create_tables(db_pool)
+            # Ensure a run row exists so lead_memory FK is satisfied
+            filename = Path(input_path).name
+            await store.insert_run(db_pool, run_id, filename, concurrency, campaign_id=campaign.id)
+            logger.info("Entity store connected — run_id=%s", run_id)
+        except Exception as exc:
+            logger.warning("Entity store unavailable (%s) — memory upserts disabled", exc)
+            db_pool = None
+
+    try:
+        tasks = [
+            process_lead(client, lead, output_dir, sem, stats, campaign=campaign, pool=db_pool, run_id=run_id)
+            for lead in leads
+        ]
+        await asyncio.gather(*tasks, return_exceptions=False)
+    finally:
+        if db_pool:
+            try:
+                await store.update_run(db_pool, run_id, "done", returncode=0, lead_count=stats.total)
+            except Exception:
+                pass
+            await db_pool.close()
 
     return stats
 

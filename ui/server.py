@@ -519,6 +519,65 @@ async def _send_to_instantly(leads: list) -> dict:
     return {"leads_sent": len(results)}
 
 
+# ── Webhook helpers ───────────────────────────────────────────────────────────
+
+def _normalize_domain_from_email(email: str) -> str:
+    """Extract and normalize the domain portion of an email address."""
+    if not email or "@" not in email:
+        return ""
+    return email.split("@", 1)[1].lower().strip()
+
+
+# ── Instantly webhook (no session auth — called by Instantly servers) ──────────
+
+@app.post("/api/webhooks/instantly")
+async def instantly_webhook(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "ignored", "reason": "invalid json"})
+
+    event_type  = (body.get("event_type") or "").lower()
+    lead_email  = body.get("lead_email") or ""
+    campaign_id = body.get("campaign_id") or ""
+    lead_id     = body.get("lead_id") or ""
+    timestamp   = body.get("timestamp") or datetime.utcnow().isoformat()
+
+    signal_map = {"reply": "outreach_reply", "bounce": "outreach_bounce"}
+    if event_type not in signal_map:
+        return JSONResponse({"status": "skipped", "reason": f"event_type={event_type} not tracked"})
+
+    signal_type = signal_map[event_type]
+    domain = _normalize_domain_from_email(lead_email)
+
+    if _pool and domain:
+        try:
+            if event_type == "reply":
+                await store.write_company_signals(_pool, domain, [{
+                    "signal_type": signal_type,
+                    "headline": f"Email reply from {lead_email}",
+                    "source": "instantly_webhook",
+                    "occurred_at": timestamp,
+                }])
+                await _pool.execute(
+                    "UPDATE company_profiles SET is_hot = TRUE WHERE canonical_domain = $1", domain
+                )
+            # Only write review_feedback when we have enough context (campaign_id FK is required)
+            if campaign_id:
+                await store.add_review_feedback(
+                    _pool,
+                    lead_id=lead_id or lead_email,
+                    campaign_id=campaign_id,
+                    feedback_type=signal_type,
+                    owner="instantly_webhook",
+                    feedback_reason=f"Instantly event: {event_type} from {lead_email}",
+                )
+        except Exception as exc:
+            logger.warning("Instantly webhook DB write failed: %s", exc)
+
+    return JSONResponse({"status": "ok"})
+
+
 # ── Auth routes ───────────────────────────────────────────────────────────────
 
 @app.get("/login", response_class=HTMLResponse)
@@ -998,11 +1057,25 @@ async def api_agent_review_feedback(request: Request):
     if not lead_id or not campaign_id or not feedback_type:
         return JSONResponse({"error": "lead_id, campaign_id, and feedback_type are required"}, status_code=400)
 
+    # Resolve company/person profile IDs from lead_memory so feedback is linkable
+    company_profile_id = None
+    person_profile_id = None
+    if lead_id and _pool:
+        lm = await _pool.fetchrow(
+            "SELECT company_profile_id, person_profile_id FROM lead_memory WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1",
+            lead_id,
+        )
+        if lm:
+            company_profile_id = lm["company_profile_id"]
+            person_profile_id = lm["person_profile_id"]
+
     feedback = await store.add_review_feedback(
         _pool,
         run_id=(body.get("run_id") or "").strip() or None,
         lead_id=lead_id,
         campaign_id=campaign_id,
+        company_profile_id=company_profile_id,
+        person_profile_id=person_profile_id,
         feedback_type=feedback_type,
         feedback_reason=(body.get("feedback_reason") or "").strip(),
         corrected_decision=(body.get("corrected_decision") or "").strip() or None,
@@ -1030,6 +1103,52 @@ async def api_agent_list_review_feedback(
         offset=offset,
     )
     return JSONResponse(rows)
+
+
+@app.get("/api/agent/memory/company/{domain:path}")
+async def api_agent_memory_company(request: Request, domain: str):
+    _require_auth(request)
+    _require_db()
+    data = await store.get_company_memory(_pool, domain)
+    if data is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(data)
+
+
+@app.get("/api/agent/memory/person")
+async def api_agent_memory_person(
+    request: Request,
+    linkedin_url: str = "",
+    name: str = "",
+    domain: str = "",
+):
+    _require_auth(request)
+    _require_db()
+    company_profile_id = None
+    if domain:
+        cp = await store.get_company_profile_by_domain(_pool, domain)
+        if cp:
+            company_profile_id = cp["id"]
+    person = await store.get_person_profile(
+        _pool,
+        person_name=name,
+        linkedin_url=linkedin_url,
+        company_profile_id=company_profile_id,
+    )
+    if not person:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    history = await store.list_lead_memory_for_person(_pool, person["id"], limit=10)
+    return JSONResponse({"person": person, "lead_history": history})
+
+
+@app.get("/api/agent/accounts/search")
+async def api_agent_accounts_search(request: Request, q: str = "", limit: int = 20):
+    _require_auth(request)
+    _require_db()
+    if not q.strip():
+        return JSONResponse([])
+    results = await store.search_company_profiles(_pool, q.strip(), limit=max(1, min(limit, 50)))
+    return JSONResponse(results)
 
 
 @app.post("/api/agent/campaigns/{campaign_id}/versions")
