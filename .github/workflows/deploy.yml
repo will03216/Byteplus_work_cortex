@@ -73,9 +73,6 @@ jobs:
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
-      - name: Print runner public IP
-        run: curl -s https://api.ipify.org
-
       - name: Create/update CR pull secret
         run: |
           kubectl create secret docker-registry byteplus-cr-secret \
