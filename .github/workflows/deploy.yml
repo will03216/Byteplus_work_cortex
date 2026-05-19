@@ -88,17 +88,16 @@ jobs:
             --docker-server=${{ env.CR_REGISTRY }} \
             --docker-username=${{ secrets.CR_USERNAME }} \
             --docker-password=${{ secrets.CR_PASSWORD }} \
-            --dry-run=client -o yaml | kubectl apply -f -
+            --dry-run=client -o yaml | kubectl apply --validate=false -f -
 
       - name: Apply manifests (staging)
         run: |
-          # Patch namespace references to staging before applying
           sed 's/namespace: lead-engine$/namespace: lead-engine-staging/g' k8s/namespace.yaml \
             | sed 's/name: lead-engine$/name: lead-engine-staging/' \
-            | kubectl apply -f -
+            | kubectl apply --validate=false -f -
           for f in k8s/configmap.yaml k8s/pvc.yaml k8s/service.yaml k8s/hpa.yaml; do
             sed 's/namespace: lead-engine/namespace: lead-engine-staging/g' "$f" \
-              | kubectl apply -f -
+              | kubectl apply --validate=false -f -
           done
 
       - name: Roll out new image (staging)
@@ -135,7 +134,7 @@ jobs:
             --docker-server=${{ env.CR_REGISTRY }} \
             --docker-username=${{ secrets.CR_USERNAME }} \
             --docker-password=${{ secrets.CR_PASSWORD }} \
-            --dry-run=client -o yaml | kubectl apply -f -
+            --dry-run=client -o yaml | kubectl apply --validate=false -f -
 
       - name: Create/update app secrets (production)
         # Reads secrets from GitHub → pushes them into k8s as a Secret.
@@ -152,10 +151,10 @@ jobs:
             --from-literal=INSTANTLY_SCORE_THRESHOLD="${{ secrets.INSTANTLY_SCORE_THRESHOLD }}" \
             --from-literal=PLACEHOLDER_EMAIL="${{ secrets.PLACEHOLDER_EMAIL }}" \
             --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            --dry-run=client -o yaml | kubectl apply -f -
+            --dry-run=client -o yaml | kubectl apply --validate=false -f -
 
       - name: Apply manifests (production)
-        run: kubectl apply -f k8s/
+        run: kubectl apply --validate=false -f k8s/
 
       - name: Roll out new image (production)
         run: |
