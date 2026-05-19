@@ -58,7 +58,7 @@ jobs:
 
   # ─── 2. Deploy ────────────────────────────────────────────────────────────
   deploy:
-    name: Deploy → ${{ env.NAMESPACE }}
+    name: Deploy → lead-engine
     needs: build-and-push
     runs-on: ubuntu-latest
     environment: production
