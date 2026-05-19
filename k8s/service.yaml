@@ -5,8 +5,11 @@ metadata:
   namespace: lead-engine
   labels:
     app: lead-engine
+  annotations:
+    # Attach the pre-allocated EIP to this load balancer
+    service.beta.kubernetes.io/volcengine-loadbalancer-eip-id: "eip-31ww9g9tjtips4i4t7f9aq6zp"
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app: lead-engine
   ports:
