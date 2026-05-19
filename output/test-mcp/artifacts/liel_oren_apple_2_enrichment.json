@@ -1,0 +1,31 @@
+{
+  "lead": {
+    "lead_id": "liel_oren_apple_2",
+    "person_name": "Liel Oren",
+    "title": "Emulation And Prototype Engineer",
+    "company_name": "Apple",
+    "company_domain": "apple.com",
+    "company_size": "176181",
+    "linkedin_url": "https://www.linkedin.com/in/ACoAACmuCWoBPEfaW3koUH2XqArSeeiaENDgHQg",
+    "signal_text": "Liel Oren (Emulation and Prototype Engineer at Apple) liked a LinkedIn post (Post: https://www.linkedin.com/posts/adamlevi_%D7%91%D7%95%D7%93%D7%A7-%D7%92%D7%91%D7%95%D7%9C%D7%95%D7%AA-%D7%A2%D7%9D-seedance-20-%D7%9C%D7%94%D7%A9%D7%95%D7%95%D7%90%D7%94-%D7%9E%D7%A9%D7%90%D7%99%D7%A8-activity-7450108883504824320-lZh9). Trigify qualification note: Company (Apple) not excluded; country in target region; Apple qualifies under target industries (retail/streaming); role matches Engineering; title not excluded. Company details — industry: retail, company size: 176181 employees, location: Israel.",
+    "signal_type": "linkedin_engagement",
+    "signal_timestamp": "2026-05-13T17:02:20.275417+00:00"
+  },
+  "company_profile": {
+    "description": "Apple Inc. is a multinational technology company known for its consumer electronics, software, and online services. Founded in 1976 by Steve Jobs, Steve Wozniak, and Ronald Wayne, Apple started with the hand-built Apple I personal computer and has grown into one of the world's most valuable brands, headquartered in Cupertino, California.\n\nApple designs and sells a variety of products, including the Macintosh series of computers and laptops, the iPhone and iPad, and wearables like the Apple Watch. The company also offers digital services such as Apple Music, Apple TV+, and Apple Arcade, creating a comprehensive ecosystem for users. With around 147,000 employees, Apple fosters innovation through a unique organizational structure that encourages collaboration across departments. The company has made strategic acquisitions to enhance its offerings, further solidifying its position in the technology market.",
+    "industry": "electrical/electronic manufacturing",
+    "company_size": "1001+",
+    "funding_stage": null,
+    "total_funding_usd": null
+  },
+  "recent_signals": {
+    "recent_activity": [],
+    "hiring_signals": [
+      "Company keywords: retail, sustainable materials, immersive entertainment, personalized ai, sustainability, retail stores"
+    ],
+    "product_updates": []
+  },
+  "role_seniority": "unknown",
+  "company_website_summary": "Discover the innovative world of Apple and shop everything iPhone, iPad, Apple Watch, Mac, and Apple TV, plus explore accessories, entertainment, and expert device support. | Apple",
+  "linkedin_summary": ""
+}

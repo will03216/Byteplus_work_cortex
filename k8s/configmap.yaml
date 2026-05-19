@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lead-engine-config
+  namespace: lead-engine
+data:
+  LLM_PROVIDER: "openai"
+  LLM_API_BASE: "https://ark.ap-southeast.bytepluses.com/api/v3"
+  LLM_MODEL: "seed-2-0-pro-260328"
+  LLM_TIMEOUT_SECONDS: "30"
+  APOLLO_ENABLED: "false"
+  APOLLO_TIMEOUT_SECONDS: "10"
+  APP_USERNAME: "admin"
+  # Override per environment via Kustomize patches or Helm values

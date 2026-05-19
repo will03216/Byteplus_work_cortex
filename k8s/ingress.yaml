@@ -1,0 +1,51 @@
+# BytePlus VKE — ALB Ingress
+# Prerequisites:
+#   1. ALB Ingress Controller installed in VKE cluster (installed via VKE Add-ons page)
+#   2. An EIP allocated in BytePlus Console → EIP; paste its allocation ID below
+#   3. An ALB instance created (or let the controller auto-create one)
+#
+# Annotations reference:
+#   https://www.byteplus.com/en/docs/vke/k8s-ingress-alb
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lead-engine
+  namespace: lead-engine
+  annotations:
+    # Use BytePlus ALB ingress controller
+    kubernetes.io/ingress.class: "alb"
+
+    # --- ALB instance ---
+    # "internet" = public-facing; "intranet" = VPC-internal only
+    alb.ingress.bytedance.com/scheme: "internet"
+
+    # Attach the EIP you allocated in BytePlus Console → EIP
+    # Replace with your actual EIP allocation ID (e.g. eip-xxxxxxxxxx)
+    alb.ingress.bytedance.com/eip-id: "eip-31ww9g9tjtips4i4t7f9aq6zp"
+
+    # --- HTTPS (recommended for production) ---
+    # alb.ingress.bytedance.com/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    # alb.ingress.bytedance.com/certificate-arn: "REPLACE_WITH_SSL_CERT_ID"
+    # alb.ingress.bytedance.com/ssl-redirect: "443"
+
+    # --- Timeouts / health ---
+    alb.ingress.bytedance.com/healthcheck-path: "/health"
+    alb.ingress.bytedance.com/healthcheck-interval-seconds: "15"
+    alb.ingress.bytedance.com/healthcheck-timeout-seconds: "5"
+    alb.ingress.bytedance.com/healthy-threshold-count: "2"
+    alb.ingress.bytedance.com/unhealthy-threshold-count: "3"
+
+    # Sticky sessions (optional — useful if SSE /api/progress/{run_id} matters)
+    # alb.ingress.bytedance.com/target-group-attributes: "stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=86400"
+spec:
+  rules:
+    - host: "lead-engine.example.com"   # replace with your domain (or remove for IP-only)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lead-engine
+                port:
+                  number: 80

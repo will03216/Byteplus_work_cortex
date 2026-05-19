@@ -1,0 +1,26 @@
+{
+  "lead_id": "tal_geifman_keshet_media_group_3",
+  "segment": "broadcast_network",
+  "candidate_use_case": "Promo generation, trailers, episodic support assets, broadcast programming content acceleration",
+  "signal_strength": "medium-low",
+  "observed_evidence": [
+    "Lead is Tal Geifman with job title Head Of Videocasts | Primetime Shows At Keshet Broadcasting at Keshet Media Group",
+    "Keshet Media Group is classified as Entertainment / Media production industry, 591 employees, located in target region Israel",
+    "Role seniority is confirmed as senior",
+    "Lead engaged via liking a public LinkedIn post referencing Seedance",
+    "Job title contains no excluded junior or disqualifying role terms"
+  ],
+  "inferred_evidence": [
+    "This senior role owns primetime show and videocast production workflows that Seedance can accelerate",
+    "Keshet Media Group as a broadcast network has high volume episodic and promo video production requirements matching Seedance use cases",
+    "Lead has demonstrated initial awareness of Seedance via this content engagement"
+  ],
+  "unknowns": [
+    "Specific production pain points or bottlenecks for this lead",
+    "Current video production tooling and workflows in use at Keshet",
+    "Exact budget authority for production tooling held by this lead",
+    "Time the lead has held this current role",
+    "Intent level beyond passive liking of Seedance content"
+  ],
+  "hard_disqualifiers": []
+}

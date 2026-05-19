@@ -1,0 +1,29 @@
+{
+  "lead_id": "ahmed_abubakar_imagineart_1",
+  "segment": "ai_tools",
+  "candidate_use_case": "API integration, embed Seedance into existing AI creative platform video pipeline",
+  "signal_strength": "medium-low",
+  "observed_evidence": [
+    "Lead holds title of Founder & CEO at ImagineArt",
+    "ImagineArt is an AI-powered creative platform with an operational Video Studio feature for text-to-video generation",
+    "Company has 51-200 employees, located in United States target region",
+    "Lead liked a LinkedIn post tagged with #aivideo and #generativeai",
+    "Company is not listed on exclusion list",
+    "Company has active hiring signals for AI short videos, AI product video maker roles",
+    "Platform reports 30M+ users and 100M+ downloads"
+  ],
+  "inferred_evidence": [
+    "As Founder & CEO this persona has full budget authority for technology purchasing and integration decisions",
+    "ImagineArt matches the ai_tools target vertical as a company building AI products with video generation functionality",
+    "Engagement with AI video related content indicates potential interest in AI video tooling",
+    "Company operates a video generation product which may have use cases for embedding Seedance capability"
+  ],
+  "unknowns": [
+    "Explicit pain points or requirement for third party AI video tooling is not confirmed",
+    "Current internal video generation technology stack used by ImagineArt is unknown",
+    "Budget allocation for external video generation APIs is unknown",
+    "It is unconfirmed whether ImagineArt is developing native competitive video generation capabilities",
+    "Specific intent behind the LinkedIn like interaction is not stated"
+  ],
+  "hard_disqualifiers": []
+}

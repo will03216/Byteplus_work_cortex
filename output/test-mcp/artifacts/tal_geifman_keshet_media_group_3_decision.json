@@ -1,0 +1,20 @@
+{
+  "lead_id": "tal_geifman_keshet_media_group_3",
+  "decision": "qualified",
+  "score": 73,
+  "confidence": "medium",
+  "segment_fit": 29,
+  "workflow_fit": 9,
+  "pain_fit": 3,
+  "buyer_fit": 23,
+  "commercial_fit": 9,
+  "qualification_reasons": [
+    "Keshet Media Group is a broadcast network, classified as top tier ICP segment",
+    "Lead holds confirmed senior role as Head of Videocasts & Primetime Shows",
+    "Established 591 employee media organization located in target region",
+    "Lead demonstrated Seedance awareness via LinkedIn content engagement"
+  ],
+  "disqualification_reasons": [],
+  "reasoning_summary": "Tal Geifman is Head Of Videocasts | Primetime Shows at Keshet Media Group, a 591 employee broadcast network which is a core ICP for Seedance. The lead passively engaged with Seedance content on LinkedIn, though specific production pain points, budget authority and purchase intent remain unconfirmed. This lead achieved a total qualification score of 73.",
+  "suggested_use_case": "Promo generation, trailers, episodic support assets, broadcast programming content acceleration"
+}

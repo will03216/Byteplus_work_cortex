@@ -153,6 +153,13 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8)
 
 
+# ── Health check (no auth — used by ALB and k8s probes) ──────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "db": bool(DATABASE_URL)}
+
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _is_authenticated(request: Request) -> bool:

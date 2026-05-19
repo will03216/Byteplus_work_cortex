@@ -1,0 +1,31 @@
+{
+  "lead": {
+    "lead_id": "ahmed_abubakar_imagineart_1",
+    "person_name": "Ahmed Abubakar",
+    "title": "Founder & Ceo, Imagineart",
+    "company_name": "ImagineArt",
+    "company_domain": "imagine.art",
+    "company_size": "237",
+    "linkedin_url": "https://www.linkedin.com/in/ACoAABDwa8gB8f5JrsO-u1LZs_oxh2QHZUqlGis",
+    "signal_text": "Ahmed Abubakar (Founder & CEO, ImagineArt at ImagineArt) liked a LinkedIn post (Post: https://www.linkedin.com/posts/ali-haider-saeed-b8b19b264_aivideo-generativeai-imagineart-activity-7450057209935425536-GS8m). Trigify qualification note: Company not on exclusion list; country in target region; industry inferred as creative agencies from company name; persona matches Founder/CEO; title does not contain excluded phrase. Company details — industry: creative agencies, company size: 237 employees, location: United States.",
+    "signal_type": "linkedin_engagement",
+    "signal_timestamp": "2026-05-13T17:02:20.275417+00:00"
+  },
+  "company_profile": {
+    "description": "ImagineArt is an AI-powered creative platform founded in 2022 in Wyoming by Muhammad Abdullah. It is designed to empower creators, artists, designers, business professionals, and hobbyists by generating images, videos, music, and other digital content from text prompts. The platform features a user-friendly interface and is available on web, Android, and iOS.\n\nImagineArt offers two main studios: the Image Studio and the Video Studio. The Image Studio provides tools for text-to-image generation, image editing, and style references, allowing for customizable outputs in various styles. The Video Studio enables video generation from text or image prompts, along with features like video dubbing and realistic effects. Additional offerings include voice generation, shorts creation, and collaboration tools for teams. ImagineArt supports real-time creation and high-quality outputs, with options for free and premium plans. It is suitable for both beginners and experienced users, making creative processes accessible and efficient.",
+    "industry": "information technology & services",
+    "company_size": "51-200",
+    "funding_stage": null,
+    "total_funding_usd": null
+  },
+  "recent_signals": {
+    "recent_activity": [],
+    "hiring_signals": [
+      "Company keywords: aiartgenerator & stablediffusion, digital media, ai story generator, ai product video maker, ai style transfer, ai short videos"
+    ],
+    "product_updates": []
+  },
+  "role_seniority": "senior",
+  "company_website_summary": "ImagineArt is the best AI creative suite that generates images, videos, shorts, and voice from text prompt. The platform includes advanced editing tools, BG remover, upscaler, and custom models. With 30M+ users and 100M+ downloads, it's available on web and mobile. No experience needed! | ImagineArt - AI Creative Suite | Images, Videos, Voice | Type your prompt - turn ideas into stunning AI visuals instantly. | Bring your ideas to life with realistic images and videos in just a few clicks",
+  "linkedin_summary": ""
+}

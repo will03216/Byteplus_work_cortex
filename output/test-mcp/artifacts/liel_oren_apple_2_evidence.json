@@ -1,0 +1,25 @@
+{
+  "lead_id": "liel_oren_apple_2",
+  "segment": "unknown",
+  "candidate_use_case": "unknown",
+  "signal_strength": "low",
+  "observed_evidence": [
+    "Liel Oren holds the title Emulation And Prototype Engineer at Apple",
+    "Lead performed a LinkedIn like action on a Seedance related public post",
+    "Apple is a large multinational technology company with 176181 employees, operating in Israel",
+    "Apple offers streaming services including Apple TV+"
+  ],
+  "inferred_evidence": [
+    "Stated role title indicates this individual works in engineering prototyping, not content, video, creative or production departments",
+    "This role does not match any Seedance target buyer persona"
+  ],
+  "unknowns": [
+    "Seniority level of this engineer role",
+    "Exact team or department this individual works within at Apple",
+    "Reason for engaging with the Seedance post (personal vs professional)",
+    "Any confirmed video production workflow requirements at Apple relevant to this individual"
+  ],
+  "hard_disqualifiers": [
+    "Irrelevant role function: Emulation And Prototype Engineer has no stated relation to content, video, creative production or AI video tool purchasing workflows"
+  ]
+}

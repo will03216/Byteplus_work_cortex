@@ -1,0 +1,20 @@
+{
+  "lead_id": "liel_oren_apple_2",
+  "decision": "disqualified",
+  "score": 13,
+  "confidence": "high",
+  "segment_fit": 4,
+  "workflow_fit": 1,
+  "pain_fit": 0,
+  "buyer_fit": 1,
+  "commercial_fit": 7,
+  "qualification_reasons": [],
+  "disqualification_reasons": [
+    "Hard disqualifier: Emulation And Prototype Engineer role has no stated relation to content, video, creative production or AI video tool purchasing workflows",
+    "Role does not match any Seedance target buyer persona",
+    "No confirmed relevant video production workflow associated with this individual",
+    "Only weak engagement signal observed: single LinkedIn like action on Seedance content"
+  ],
+  "reasoning_summary": "Liel Oren is an Emulation And Prototype Engineer at Apple, with only a single LinkedIn like observed as engagement with Seedance content. This role has no identified connection to video production, creative workflows, or purchasing authority for AI video tools, triggering a hard disqualification.",
+  "suggested_use_case": "none"
+}

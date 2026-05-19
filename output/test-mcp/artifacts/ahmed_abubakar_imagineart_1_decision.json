@@ -1,0 +1,21 @@
+{
+  "lead_id": "ahmed_abubakar_imagineart_1",
+  "decision": "qualified",
+  "score": 81,
+  "confidence": "medium",
+  "segment_fit": 29,
+  "workflow_fit": 14,
+  "pain_fit": 3,
+  "buyer_fit": 25,
+  "commercial_fit": 10,
+  "qualification_reasons": [
+    "Lead is Founder & CEO with full budget authority for technology purchasing",
+    "Company matches target ICP as an AI tools provider",
+    "Confirmed operational video studio workflow exists at ImagineArt",
+    "Established US based company with 51-200 employees and active AI video role hiring",
+    "Lead engaged with AI video tagged content on LinkedIn"
+  ],
+  "disqualification_reasons": [],
+  "reasoning_summary": "This lead is Founder & CEO at ImagineArt, an AI creative platform operating an existing video studio feature. The company is an established US business with 51-200 employees and active hiring for AI video roles. While no explicit pain points are confirmed, the lead engaged with AI video content indicating potential interest.",
+  "suggested_use_case": "API integration, embed Seedance into existing AI creative platform video pipeline"
+}
