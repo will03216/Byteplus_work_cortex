@@ -67,6 +67,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug connectivity
+        run: |
+          echo "Runner IP: $(curl -s https://ifconfig.me)"
+          nc -zv 163.7.5.36 6443 && echo "Port 6443 OPEN" || echo "Port 6443 BLOCKED"
+
       - name: Configure kubectl
         run: |
           mkdir -p ~/.kube
