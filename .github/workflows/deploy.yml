@@ -1,9 +1,5 @@
 name: Build, Push & Deploy
 
-# Trigger on:
-#   main     → production  (lead-engine namespace)
-#   campaign → staging     (lead-engine-staging namespace)
-#   release/* branches follow the same staging path as campaign
 on:
   push:
     branches:
@@ -15,6 +11,7 @@ env:
   CR_REGISTRY: mittul-ap-southeast-3.cr.bytepluses.com
   CR_NAMESPACE: lead-engine
   CR_REPO: lead-engine
+  NAMESPACE: lead-engine
 
 jobs:
   # ─── 1. Build & push image ────────────────────────────────────────────────
@@ -23,7 +20,6 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image_tag: ${{ steps.meta.outputs.tag }}
       full_image: ${{ steps.meta.outputs.full_image }}
 
     steps:
@@ -36,7 +32,6 @@ jobs:
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
           TAG="${SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           FULL="${{ env.CR_REGISTRY }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:${TAG}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "full_image=${FULL}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Byteplus CR
@@ -61,87 +56,39 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ─── 2. Deploy to staging (campaign / release/* branches) ────────────────
-  deploy-staging:
-    name: Deploy → staging
+  # ─── 2. Deploy ────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy → ${{ env.NAMESPACE }}
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
-    environment: staging
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure kubectl (BytePlus VKE)
-        # Write the kubeconfig that GitHub Actions will use to talk to VKE.
-        # Store the full base64-encoded kubeconfig as KUBECONFIG_B64 in repo secrets.
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-
-      - name: Create/update CR pull secret (staging)
-        run: |
-          kubectl create secret docker-registry byteplus-cr-secret \
-            --namespace lead-engine-staging \
-            --docker-server=${{ env.CR_REGISTRY }} \
-            --docker-username=${{ secrets.CR_USERNAME }} \
-            --docker-password=${{ secrets.CR_PASSWORD }} \
-            --dry-run=client -o yaml | kubectl apply --validate=false -f -
-
-      - name: Apply manifests (staging)
-        run: |
-          sed 's/namespace: lead-engine$/namespace: lead-engine-staging/g' k8s/namespace.yaml \
-            | sed 's/name: lead-engine$/name: lead-engine-staging/' \
-            | kubectl apply --validate=false -f -
-          for f in k8s/configmap.yaml k8s/pvc.yaml k8s/service.yaml k8s/hpa.yaml; do
-            sed 's/namespace: lead-engine/namespace: lead-engine-staging/g' "$f" \
-              | kubectl apply --validate=false -f -
-          done
-
-      - name: Roll out new image (staging)
-        run: |
-          kubectl set image deployment/lead-engine \
-            lead-engine=${{ needs.build-and-push.outputs.full_image }} \
-            --namespace lead-engine-staging
-          kubectl rollout status deployment/lead-engine \
-            --namespace lead-engine-staging \
-            --timeout=300s
-
-  # ─── 3. Deploy to production (main branch only) ───────────────────────────
-  deploy-production:
-    name: Deploy → production
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
     environment: production
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure kubectl (BytePlus VKE)
+      - name: Configure kubectl
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
-      - name: Create/update CR pull secret (production)
+      - name: Print runner public IP
+        run: curl -s https://api.ipify.org
+
+      - name: Create/update CR pull secret
         run: |
           kubectl create secret docker-registry byteplus-cr-secret \
-            --namespace lead-engine \
+            --namespace ${{ env.NAMESPACE }} \
             --docker-server=${{ env.CR_REGISTRY }} \
             --docker-username=${{ secrets.CR_USERNAME }} \
             --docker-password=${{ secrets.CR_PASSWORD }} \
             --dry-run=client -o yaml | kubectl apply --validate=false -f -
 
-      - name: Create/update app secrets (production)
-        # Reads secrets from GitHub → pushes them into k8s as a Secret.
-        # This replaces the secret.yaml template file (never commit real values).
+      - name: Create/update app secrets
         run: |
           kubectl create secret generic lead-engine-secrets \
-            --namespace lead-engine \
+            --namespace ${{ env.NAMESPACE }} \
             --from-literal=LLM_API_KEY="${{ secrets.LLM_API_KEY }}" \
             --from-literal=APOLLO_API_KEY="${{ secrets.APOLLO_API_KEY }}" \
             --from-literal=APP_PASSWORD="${{ secrets.APP_PASSWORD }}" \
@@ -153,19 +100,19 @@ jobs:
             --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             --dry-run=client -o yaml | kubectl apply --validate=false -f -
 
-      - name: Apply manifests (production)
+      - name: Apply manifests
         run: kubectl apply --validate=false -f k8s/
 
-      - name: Roll out new image (production)
+      - name: Roll out new image
         run: |
           kubectl set image deployment/lead-engine \
             lead-engine=${{ needs.build-and-push.outputs.full_image }} \
-            --namespace lead-engine
+            --namespace ${{ env.NAMESPACE }}
           kubectl rollout status deployment/lead-engine \
-            --namespace lead-engine \
+            --namespace ${{ env.NAMESPACE }} \
             --timeout=300s
 
-      - name: Verify rollout
+      - name: Verify
         run: |
-          kubectl get pods -n lead-engine -l app=lead-engine
-          kubectl get ingress -n lead-engine
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=lead-engine
+          kubectl get svc -n ${{ env.NAMESPACE }}
