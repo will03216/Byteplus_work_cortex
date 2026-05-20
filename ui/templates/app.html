@@ -841,26 +841,26 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
   <div class="skills-modal">
     <div>
       <div class="skills-modal-title">New Campaign</div>
-      <div class="skills-modal-sub">Upload a zip with your campaign skill files to register a new campaign instantly.</div>
+      <div class="skills-modal-sub">Upload a zip or the 6 individual campaign files to register a new campaign instantly.</div>
     </div>
     <div class="skills-field">
       <label>Campaign Name</label>
       <input type="text" id="skills-new-name" placeholder="e.g. Google Veo" oninput="validateNewCampaignForm()">
     </div>
     <div class="skills-field">
-      <label>Skill Files (zip)</label>
+      <label>Skill Files</label>
       <div class="skills-zip-drop" id="skills-zip-drop" onclick="document.getElementById('skills-zip-input').click()"
            ondragover="event.preventDefault();this.classList.add('drag-over')"
            ondragleave="this.classList.remove('drag-over')"
            ondrop="handleSkillsZipDrop(event)">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--text3)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        <div class="skills-zip-drop-hint" id="skills-zip-drop-hint">Drop zip here or click to browse</div>
-        <div class="skills-zip-drop-sub">campaign.zip</div>
+        <div class="skills-zip-drop-hint" id="skills-zip-drop-hint">Drop zip or 6 files here, or click to browse</div>
+        <div class="skills-zip-drop-sub">campaign.zip or config.json + 5 markdown files</div>
       </div>
-      <input type="file" id="skills-zip-input" accept=".zip" style="display:none" onchange="handleSkillsZipSelect(event)">
+      <input type="file" id="skills-zip-input" accept=".zip,.json,.md" multiple style="display:none" onchange="handleSkillsZipSelect(event)">
     </div>
     <div class="skills-format-hint">
-      <strong>All 6 files are required inside the zip:</strong><br>
+      <strong>Provide either one zip or all 6 required files:</strong><br>
       config.json &nbsp;·&nbsp; product.md &nbsp;·&nbsp; icp.md<br>
       signals.md &nbsp;·&nbsp; disqualification.md &nbsp;·&nbsp; qualification.md
     </div>
@@ -2607,7 +2607,7 @@ let _skillsCampaigns = [];
 let _skillsActiveCampaignId = null;
 let _skillsActiveFile = null;
 let _skillsEditorDirty = false;
-let _skillsZipFile = null;
+let _skillsUploadFiles = [];
 
 async function openSkills(campaignId = null) {
   if (campaignId) _skillsActiveCampaignId = campaignId;
@@ -2726,6 +2726,41 @@ function onSkillsEditorChange() {
   setSkillsEditorStatus('');
 }
 
+async function readApiPayload(res) {
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    try {
+      return await res.json();
+    } catch (_) {
+      return {};
+    }
+  }
+  try {
+    const text = await res.text();
+    return { error: text ? `HTTP ${res.status}: ${text.slice(0, 300)}` : `HTTP ${res.status}` };
+  } catch (_) {
+    return { error: `HTTP ${res.status}` };
+  }
+}
+
+function logClientDebugEvent(stage, extra = {}) {
+  try {
+    const params = new URLSearchParams();
+    params.set('stage', stage);
+    Object.entries(extra).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value).slice(0, 300));
+      }
+    });
+    fetch(`/api/debug/client-event?${params.toString()}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      keepalive: true
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 async function saveSkillFile() {
   if (!_skillsActiveCampaignId || !_skillsActiveFile) return;
   const textarea = document.getElementById('skills-textarea');
@@ -2736,11 +2771,17 @@ async function saveSkillFile() {
   saveBtn.disabled = true;
 
   try {
+    // #region debug-point A:save-skill-fetch
+    fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"skill-upload-403",runId:"pre-fix",hypothesisId:"A",location:"ui/templates/app.html:saveSkillFile",msg:"[DEBUG] saveSkillFile starting fetch",data:{campaignId:_skillsActiveCampaignId,filename:_skillsActiveFile,cookieEnabled:navigator.cookieEnabled,origin:window.location.origin},ts:Date.now()})}).catch(()=>{});
+    // #endregion
     const res = await fetch(
       `/api/skills/${encodeURIComponent(_skillsActiveCampaignId)}/${encodeURIComponent(_skillsActiveFile)}`,
       { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }
     );
-    const data = await res.json();
+    // #region debug-point A:save-skill-response
+    fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"skill-upload-403",runId:"pre-fix",hypothesisId:"A",location:"ui/templates/app.html:saveSkillFile",msg:"[DEBUG] saveSkillFile fetch resolved",data:{campaignId:_skillsActiveCampaignId,filename:_skillsActiveFile,status:res.status,ok:res.ok,type:res.type,redirected:res.redirected},ts:Date.now()})}).catch(()=>{});
+    // #endregion
+    const data = await readApiPayload(res);
     if (!res.ok) {
       setSkillsEditorStatus(data.error || 'Save failed', 'error');
     } else {
@@ -2750,6 +2791,9 @@ async function saveSkillFile() {
       setSkillsEditorStatus(`Saved${reloaded ? ' · reloaded: ' + reloaded : ''}${warn}`, 'saved');
     }
   } catch (e) {
+    // #region debug-point B:save-skill-error
+    fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"skill-upload-403",runId:"pre-fix",hypothesisId:"B",location:"ui/templates/app.html:saveSkillFile",msg:"[DEBUG] saveSkillFile threw",data:{campaignId:_skillsActiveCampaignId,filename:_skillsActiveFile,message:e?.message || String(e),name:e?.name || null},ts:Date.now()})}).catch(()=>{});
+    // #endregion
     setSkillsEditorStatus('Network error', 'error');
   }
   saveBtn.disabled = false;
@@ -2794,9 +2838,9 @@ async function deleteSkillCampaign() {
 // ── New Campaign Modal ───────────────────────────────────────────────────────
 
 function openNewCampaignModal() {
-  _skillsZipFile = null;
+  _skillsUploadFiles = [];
   document.getElementById('skills-new-name').value = '';
-  document.getElementById('skills-zip-drop-hint').textContent = 'Drop zip here or click to browse';
+  document.getElementById('skills-zip-drop-hint').textContent = 'Drop zip or 6 files here, or click to browse';
   document.getElementById('skills-zip-input').value = '';
   document.getElementById('skills-modal-error').style.display = 'none';
   document.getElementById('skills-modal-create-btn').disabled = true;
@@ -2810,38 +2854,53 @@ function closeNewCampaignModal() {
   const btn = document.getElementById('skills-modal-create-btn');
   btn.textContent = 'Create Campaign';
   btn.disabled = true;
-  _skillsZipFile = null;
+  _skillsUploadFiles = [];
   const hint = document.getElementById('skills-zip-drop-hint');
-  if (hint) hint.textContent = 'Drop zip here or click to browse';
+  if (hint) hint.textContent = 'Drop zip or 6 files here, or click to browse';
 }
 
 function handleSkillsZipDrop(event) {
   event.preventDefault();
   document.getElementById('skills-zip-drop').classList.remove('drag-over');
-  const f = event.dataTransfer.files[0];
-  if (f) setSkillsZipFile(f);
+  const files = Array.from(event.dataTransfer.files || []);
+  if (files.length) setSkillsUploadFiles(files);
 }
 
 function handleSkillsZipSelect(event) {
-  const f = event.target.files[0];
-  if (f) setSkillsZipFile(f);
+  const files = Array.from(event.target.files || []);
+  if (files.length) setSkillsUploadFiles(files);
 }
 
-function setSkillsZipFile(f) {
-  _skillsZipFile = f;
-  document.getElementById('skills-zip-drop-hint').textContent = `${f.name} (${(f.size / 1024).toFixed(1)} KB)`;
+function setSkillsUploadFiles(files) {
+  _skillsUploadFiles = files;
+  const hint = document.getElementById('skills-zip-drop-hint');
+  if (!hint) return;
+  if (files.length === 1) {
+    const f = files[0];
+    hint.textContent = `${f.name} (${(f.size / 1024).toFixed(1)} KB)`;
+  } else {
+    hint.textContent = `${files.length} files selected`;
+  }
+  logClientDebugEvent('skills-zip-selected', {
+    name: document.getElementById('skills-new-name').value.trim(),
+    filename: files.map(f => f.name).join(', '),
+    size: files.reduce((sum, f) => sum + (f.size || 0), 0),
+    detail: files.length === 1 ? (files[0].type || 'unknown') : `${files.length} files`,
+    cookies: navigator.cookieEnabled,
+    online: navigator.onLine
+  });
   validateNewCampaignForm();
 }
 
 function validateNewCampaignForm() {
   const name = document.getElementById('skills-new-name').value.trim();
   const btn = document.getElementById('skills-modal-create-btn');
-  btn.disabled = !(name && _skillsZipFile);
+  btn.disabled = !(name && _skillsUploadFiles.length);
 }
 
 async function createNewCampaign() {
   const name = document.getElementById('skills-new-name').value.trim();
-  if (!name || !_skillsZipFile) return;
+  if (!name || !_skillsUploadFiles.length) return;
 
   const errorEl = document.getElementById('skills-modal-error');
   const btn = document.getElementById('skills-modal-create-btn');
@@ -2851,11 +2910,37 @@ async function createNewCampaign() {
 
   const fd = new FormData();
   fd.append('name', name);
-  fd.append('file', _skillsZipFile);
+  const zipFile = _skillsUploadFiles.find(f => /\.zip$/i.test(f.name));
+  if (zipFile) {
+    fd.append('file', zipFile);
+  } else {
+    _skillsUploadFiles.forEach(f => fd.append('files', f));
+  }
 
   try {
+    logClientDebugEvent('skills-upload-start', {
+      name,
+      filename: _skillsUploadFiles.map(f => f.name).join(', '),
+      size: _skillsUploadFiles.reduce((sum, f) => sum + (f.size || 0), 0),
+      detail: zipFile ? (zipFile.type || 'zip') : `${_skillsUploadFiles.length} files`,
+      cookies: navigator.cookieEnabled,
+      online: navigator.onLine
+    });
+    // #region debug-point D:create-campaign-fetch
+    fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"skill-upload-403",runId:"pre-fix",hypothesisId:"D",location:"ui/templates/app.html:createNewCampaign",msg:"[DEBUG] createNewCampaign starting fetch",data:{name,filename:_skillsUploadFiles.map(f => f.name).join(', '),size:_skillsUploadFiles.reduce((sum, f) => sum + (f.size || 0), 0),type:zipFile ? (zipFile.type || 'zip') : `${_skillsUploadFiles.length} files`,cookieEnabled:navigator.cookieEnabled,origin:window.location.origin},ts:Date.now()})}).catch(()=>{});
+    // #endregion
     const res = await fetch('/api/skills', { method: 'POST', body: fd });
-    const data = await res.json();
+    logClientDebugEvent('skills-upload-response', {
+      name,
+      filename: _skillsUploadFiles.map(f => f.name).join(', '),
+      size: _skillsUploadFiles.reduce((sum, f) => sum + (f.size || 0), 0),
+      detail: `${res.status} ${res.type || ''}`.trim(),
+      online: navigator.onLine
+    });
+    // #region debug-point D:create-campaign-response
+    fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"skill-upload-403",runId:"pre-fix",hypothesisId:"D",location:"ui/templates/app.html:createNewCampaign",msg:"[DEBUG] createNewCampaign fetch resolved",data:{name,status:res.status,ok:res.ok,type:res.type,redirected:res.redirected},ts:Date.now()})}).catch(()=>{});
+    // #endregion
+    const data = await readApiPayload(res);
     if (!res.ok) {
       errorEl.textContent = data.error || 'Failed to create campaign';
       errorEl.style.display = 'block';
@@ -2870,6 +2955,17 @@ async function createNewCampaign() {
     await loadSkillsCampaigns();
     await selectSkillCampaign(data.campaign_id);
   } catch (e) {
+    logClientDebugEvent('skills-upload-catch', {
+      name,
+      filename: _skillsUploadFiles.map(f => f.name).join(', '),
+      size: _skillsUploadFiles.reduce((sum, f) => sum + (f.size || 0), 0),
+      err: e?.message || String(e),
+      detail: e?.name || 'Error',
+      online: navigator.onLine
+    });
+    // #region debug-point E:create-campaign-error
+    fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"skill-upload-403",runId:"pre-fix",hypothesisId:"E",location:"ui/templates/app.html:createNewCampaign",msg:"[DEBUG] createNewCampaign threw",data:{name,filename:_skillsUploadFiles.map(f => f.name).join(', '),message:e?.message || String(e),nameError:e?.name || null},ts:Date.now()})}).catch(()=>{});
+    // #endregion
     errorEl.textContent = 'Network error — please try again';
     errorEl.style.display = 'block';
     btn.textContent = 'Create Campaign';

@@ -1,0 +1,2 @@
+{"sessionId": "run-import-missing", "runId": "pre-fix", "hypothesisId": "D", "location": "main.py:run_batch:raw", "msg": "[DEBUG] raw leads loaded", "data": {"input_path": "/tmp/tmprryt7u8w.csv", "suffix": ".csv", "raw_lead_count": 5}, "ts": 1779290800778}
+{"sessionId": "run-import-missing", "runId": "pre-fix", "hypothesisId": "D", "location": "main.py:run_batch:normalized", "msg": "[DEBUG] leads normalized", "data": {"raw_lead_count": 5, "normalized_count": 5, "skipped_count": 0}, "ts": 1779290800788}

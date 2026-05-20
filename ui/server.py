@@ -160,6 +160,36 @@ async def health():
     return {"status": "ok", "db": bool(DATABASE_URL)}
 
 
+# ── Debug client-event logging ────────────────────────────────────────────────
+
+@app.get("/api/debug/client-event")
+async def api_debug_client_event(request: Request):
+    _require_auth(request)
+    stage = request.query_params.get("stage", "unknown")
+    detail = request.query_params.get("detail", "")
+    campaign_id = request.query_params.get("campaign_id", "")
+    name = request.query_params.get("name", "")
+    filename = request.query_params.get("filename", "")
+    size = request.query_params.get("size", "")
+    err = request.query_params.get("err", "")
+    logger.warning(
+        "CLIENT_DEBUG stage=%s detail=%s campaign_id=%s name=%s filename=%s size=%s err=%s online=%s cookies=%s origin=%s referer=%s ua=%s",
+        stage,
+        detail,
+        campaign_id,
+        name,
+        filename,
+        size,
+        err,
+        request.query_params.get("online", ""),
+        request.query_params.get("cookies", ""),
+        request.headers.get("origin"),
+        request.headers.get("referer"),
+        request.headers.get("user-agent"),
+    )
+    return JSONResponse({"ok": True})
+
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _is_authenticated(request: Request) -> bool:
@@ -168,6 +198,12 @@ def _is_authenticated(request: Request) -> bool:
 
 def _require_auth(request: Request):
     if not _is_authenticated(request):
+        # #region debug-point C:auth-rejected
+        try:
+            import json, urllib.request; urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:7777/event", data=json.dumps({"sessionId":"skill-upload-403","runId":"pre-fix","hypothesisId":"C","location":"ui/server.py:_require_auth","msg":"[DEBUG] auth rejected","data":{"path":str(request.url.path),"method":request.method,"has_cookie":bool(request.headers.get("cookie")),"origin":request.headers.get("origin"),"referer":request.headers.get("referer"),"authenticated":False}}).encode(), headers={"Content-Type":"application/json"}), timeout=0.4).read()
+        except Exception:
+            pass
+        # #endregion
         raise HTTPException(status_code=401)
 
 
@@ -1746,6 +1782,12 @@ async def api_skills_read(request: Request, campaign_id: str, filename: str):
 @app.put("/api/skills/{campaign_id}/{filename}")
 async def api_skills_write(request: Request, campaign_id: str, filename: str):
     """Save edited content to a skill file and hot-reload the affected campaign(s)."""
+    # #region debug-point A:skills-write-entry
+    try:
+        import json, urllib.request; urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:7777/event", data=json.dumps({"sessionId":"skill-upload-403","runId":"pre-fix","hypothesisId":"A","location":"ui/server.py:api_skills_write","msg":"[DEBUG] skills write request received","data":{"campaign_id":campaign_id,"filename":filename,"method":request.method,"has_cookie":bool(request.headers.get("cookie")),"origin":request.headers.get("origin"),"referer":request.headers.get("referer"),"content_type":request.headers.get("content-type")}}).encode(), headers={"Content-Type":"application/json"}), timeout=0.4).read()
+    except Exception:
+        pass
+    # #endregion
     _require_auth(request)
     if ".." in filename or "/" in filename:
         return JSONResponse({"error": "Invalid filename"}, status_code=400)
@@ -1784,13 +1826,24 @@ async def api_skills_write(request: Request, campaign_id: str, filename: str):
 
 
 @app.post("/api/skills")
-async def api_skills_create(request: Request, file: UploadFile = File(...), name: str = Form(...)):
+async def api_skills_create(
+    request: Request,
+    file: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
+    name: str = Form(...),
+):
     """
     Create a new campaign from a zip upload.
     All 6 files are required: config.json, product.md, icp.md,
     signals.md, disqualification.md, qualification.md.
     campaign_id is derived from name: lowercased, spaces → hyphens.
     """
+    # #region debug-point D:skills-create-entry
+    try:
+        import json, urllib.request; urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:7777/event", data=json.dumps({"sessionId":"skill-upload-403","runId":"pre-fix","hypothesisId":"D","location":"ui/server.py:api_skills_create","msg":"[DEBUG] skills create request received","data":{"name":name,"filename":file.filename if file else None,"filenames":[f.filename for f in (files or [])],"method":request.method,"has_cookie":bool(request.headers.get("cookie")),"origin":request.headers.get("origin"),"referer":request.headers.get("referer"),"content_type":request.headers.get("content-type")}}).encode(), headers={"Content-Type":"application/json"}), timeout=0.4).read()
+    except Exception:
+        pass
+    # #endregion
     _require_auth(request)
     import zipfile
     import io as _io
@@ -1807,35 +1860,53 @@ async def api_skills_create(request: Request, file: UploadFile = File(...), name
     elif (SKILLS_ROOT / campaign_id).exists():
         return JSONResponse({"error": f"Campaign '{campaign_id}' already exists"}, status_code=409)
 
-    zip_bytes = await file.read()
-    try:
-        zf = zipfile.ZipFile(_io.BytesIO(zip_bytes))
-    except zipfile.BadZipFile:
-        return JSONResponse({"error": "Uploaded file is not a valid zip"}, status_code=400)
-
-    entries = [n for n in zf.namelist() if not n.endswith("/") and not n.startswith("__MACOSX")]
-    if not entries:
-        return JSONResponse({"error": "Zip is empty"}, status_code=400)
-
-    # Strip common top-level directory if all files share one
-    parts = [e.split("/") for e in entries]
-    prefix = parts[0][0] if all(p[0] == parts[0][0] for p in parts) and len(parts[0]) > 1 else ""
-
-    def _strip(n: str) -> str:
-        return n[len(prefix) + 1:] if prefix and n.startswith(prefix + "/") else n
-
-    files_in_zip = {_strip(e): e for e in entries}
-
     required = {"config.json", "product.md", "icp.md", "signals.md", "disqualification.md", "qualification.md"}
-    missing = required - files_in_zip.keys()
-    if missing:
-        return JSONResponse({"error": f"Zip missing required files: {', '.join(sorted(missing))}"}, status_code=400)
-
-    # Extract content for editable files
     files_content: dict[str, str] = {}
-    for local_name, zip_entry in files_in_zip.items():
-        if Path(local_name).suffix in _EDITABLE_EXTS:
-            files_content[local_name] = zf.read(zip_entry).decode("utf-8")
+
+    if file is not None:
+        zip_bytes = await file.read()
+        try:
+            zf = zipfile.ZipFile(_io.BytesIO(zip_bytes))
+        except zipfile.BadZipFile:
+            return JSONResponse({"error": "Uploaded file is not a valid zip"}, status_code=400)
+
+        entries = [n for n in zf.namelist() if not n.endswith("/") and not n.startswith("__MACOSX")]
+        if not entries:
+            return JSONResponse({"error": "Zip is empty"}, status_code=400)
+
+        parts = [e.split("/") for e in entries]
+        prefix = parts[0][0] if all(p[0] == parts[0][0] for p in parts) and len(parts[0]) > 1 else ""
+
+        def _strip(n: str) -> str:
+            return n[len(prefix) + 1:] if prefix and n.startswith(prefix + "/") else n
+
+        files_in_zip = {_strip(e): e for e in entries}
+        missing = required - files_in_zip.keys()
+        if missing:
+            return JSONResponse({"error": f"Zip missing required files: {', '.join(sorted(missing))}"}, status_code=400)
+
+        for local_name, zip_entry in files_in_zip.items():
+            if Path(local_name).suffix in _EDITABLE_EXTS:
+                try:
+                    files_content[local_name] = zf.read(zip_entry).decode("utf-8")
+                except UnicodeDecodeError:
+                    return JSONResponse({"error": f"File '{local_name}' must be UTF-8 text"}, status_code=400)
+    else:
+        upload_map = {
+            Path(f.filename or "").name: f
+            for f in (files or [])
+            if (f.filename or "").strip()
+        }
+        if not upload_map:
+            return JSONResponse({"error": "Upload either a zip or the 6 required skill files"}, status_code=400)
+        missing = required - upload_map.keys()
+        if missing:
+            return JSONResponse({"error": f"Missing required files: {', '.join(sorted(missing))}"}, status_code=400)
+        for local_name in required:
+            try:
+                files_content[local_name] = (await upload_map[local_name].read()).decode("utf-8")
+            except UnicodeDecodeError:
+                return JSONResponse({"error": f"File '{local_name}' must be UTF-8 text"}, status_code=400)
 
     written = list(files_content.keys())
 
