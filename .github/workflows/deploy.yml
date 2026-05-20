@@ -6,6 +6,7 @@ on:
       - main
       - campaign
       - "release/**"
+  workflow_dispatch:
 
 env:
   CR_REGISTRY: mittul-ap-southeast-3.cr.bytepluses.com
@@ -110,3 +111,35 @@ jobs:
         run: |
           sleep 20
           docker exec lead-engine python3 -c "import urllib.request; r=urllib.request.urlopen('http://localhost:8080/health',timeout=10); print('Health check passed:', r.status)"
+
+  # ─── 3. Diagnostics (on-demand) ───────────────────────────────────────────
+  diagnose:
+    name: Diagnose ECS networking
+    runs-on: self-hosted
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+
+    steps:
+      - name: Container status and ports
+        run: |
+          echo "=== Running containers ==="
+          docker ps
+          echo "=== Port bindings for lead-engine ==="
+          docker port lead-engine 2>/dev/null || echo "Container not found"
+          echo "=== Last 30 log lines ==="
+          docker logs lead-engine --tail 30 2>&1 || true
+
+      - name: Network connectivity from host
+        run: |
+          echo "=== Host IP addresses ==="
+          docker run --rm --network host busybox ip addr show eth0 2>/dev/null || \
+            docker run --rm --network host busybox ifconfig eth0 2>/dev/null || true
+          echo "=== Listening ports on host ==="
+          docker run --rm --network host busybox netstat -tlnp 2>/dev/null || true
+          echo "=== Health endpoint from host network ==="
+          docker run --rm --network host busybox wget -qO- http://localhost:8080/health 2>&1 || true
+          docker run --rm --network host busybox wget -qO- http://localhost:80/health 2>&1 || true
+
+      - name: UFW / iptables check
+        run: |
+          docker run --rm --network host --cap-add NET_ADMIN busybox sh -c \
+            "iptables -L INPUT -n --line-numbers 2>/dev/null | head -30 || true"
