@@ -24,6 +24,9 @@ LLM_PROVIDER="__LLM_PROVIDER__"
 LLM_API_BASE="__LLM_API_BASE__"
 LLM_TIMEOUT_SECONDS="__LLM_TIMEOUT_SECONDS__"
 OUTPUT_DIR="__OUTPUT_DIR__"
+APP_USERNAME="__APP_USERNAME__"
+APP_PASSWORD="__APP_PASSWORD__"
+SESSION_SECRET="__SESSION_SECRET__"
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "[1/5] Installing Docker..."
@@ -57,6 +60,9 @@ LLM_PROVIDER=$LLM_PROVIDER
 LLM_API_BASE=$LLM_API_BASE
 LLM_TIMEOUT_SECONDS=$LLM_TIMEOUT_SECONDS
 OUTPUT_DIR=$OUTPUT_DIR
+APP_USERNAME=$APP_USERNAME
+APP_PASSWORD=$APP_PASSWORD
+SESSION_SECRET=$SESSION_SECRET
 ENV
 chmod 600 /etc/lead-engine.env
 
@@ -81,6 +87,7 @@ ExecStartPre=/usr/bin/docker pull $IMAGE
 
 ExecStart=/usr/bin/docker run --rm \\
   --name lead-engine \\
+  -p 80:8080 \\
   -p 8080:8080 \\
   --env-file /etc/lead-engine.env \\
   -v $APP_DIR/output/runs:/app/output/runs \\

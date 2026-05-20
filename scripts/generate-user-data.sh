@@ -27,6 +27,7 @@ source "$PROD_ENV"
 : "${CR_USERNAME:?}" "${CR_PASSWORD:?}"
 : "${APP_DIR:?}"
 : "${DATABASE_URL:?}" "${LLM_API_KEY:?}" "${LLM_MODEL:?}"
+: "${APP_USERNAME:?}" "${APP_PASSWORD:?}" "${SESSION_SECRET:?}"
 
 IMAGE="$CR_REGISTRY/$CR_NAMESPACE/$CR_REPO:latest"
 
@@ -43,6 +44,9 @@ sed \
   -e "s|__LLM_API_BASE__|${LLM_API_BASE:-}|g" \
   -e "s|__LLM_TIMEOUT_SECONDS__|${LLM_TIMEOUT_SECONDS:-30}|g" \
   -e "s|__OUTPUT_DIR__|${OUTPUT_DIR:-./output}|g" \
+  -e "s|__APP_USERNAME__|$APP_USERNAME|g" \
+  -e "s|__APP_PASSWORD__|$APP_PASSWORD|g" \
+  -e "s|__SESSION_SECRET__|$SESSION_SECRET|g" \
   "$TEMPLATE" > "$OUTPUT"
 
 chmod +x "$OUTPUT"

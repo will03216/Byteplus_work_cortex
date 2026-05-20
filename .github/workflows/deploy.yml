@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 env:
-  CR_REGISTRY: mittul-ap-southeast-3.cr.bytepluses.com
-  CR_NAMESPACE: lead-engine
+  CR_REGISTRY: cr-mittul-ap-southeast-3.cr.bytepluses.com
+  CR_NAMESPACE: mittul
   CR_REPO: lead-engine
 
 jobs:

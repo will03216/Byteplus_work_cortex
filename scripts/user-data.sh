@@ -11,19 +11,22 @@ set -euo pipefail
 
 # ── Injected by generate-user-data.sh ────────────────────────────────────────
 CR_REGISTRY="cr-mittul-ap-southeast-3.cr.bytepluses.com"
-CR_USERNAME="mittul.madaan@78638713"
+CR_USERNAME="mittul.madaan@79658846"
 CR_PASSWORD="Gannu@1994"
 IMAGE="cr-mittul-ap-southeast-3.cr.bytepluses.com/mittul/lead-engine:latest"
 APP_DIR="/opt/lead-engine"
 
 # ── Env vars for the container (injected from .env.production) ────────────────
-DATABASE_URL="postgresql://mittul:Gannu@1994@postgresf90f08626dca.rds-pg.ibytepluses.com/lead-pipeline"
+DATABASE_URL="postgresql://mittul:byteplus_12345@192.168.1.109:5432/lead-pipeline"
 LLM_MODEL="seed-2-0-pro-260328"
 LLM_API_KEY="291e83aa-08bc-47ff-aca8-31e5807d027d"
 LLM_PROVIDER="openai"
 LLM_API_BASE="https://ark.ap-southeast.bytepluses.com/api/v3"
 LLM_TIMEOUT_SECONDS="30"
 OUTPUT_DIR="./output"
+APP_USERNAME="admin"
+APP_PASSWORD="byteplus@13042026"
+SESSION_SECRET="byteplus_security_session_13042026"
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "[1/5] Installing Docker..."
@@ -57,6 +60,9 @@ LLM_PROVIDER=$LLM_PROVIDER
 LLM_API_BASE=$LLM_API_BASE
 LLM_TIMEOUT_SECONDS=$LLM_TIMEOUT_SECONDS
 OUTPUT_DIR=$OUTPUT_DIR
+APP_USERNAME=$APP_USERNAME
+APP_PASSWORD=$APP_PASSWORD
+SESSION_SECRET=$SESSION_SECRET
 ENV
 chmod 600 /etc/lead-engine.env
 
@@ -81,6 +87,7 @@ ExecStartPre=/usr/bin/docker pull $IMAGE
 
 ExecStart=/usr/bin/docker run --rm \\
   --name lead-engine \\
+  -p 80:8080 \\
   -p 8080:8080 \\
   --env-file /etc/lead-engine.env \\
   -v $APP_DIR/output/runs:/app/output/runs \\
