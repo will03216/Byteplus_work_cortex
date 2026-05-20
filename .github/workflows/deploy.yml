@@ -108,11 +108,4 @@ jobs:
       - name: Health check
         run: |
           sleep 20
-          docker exec lead-engine python3 -c "
-import urllib.request, sys
-try:
-    r = urllib.request.urlopen('http://localhost:8080/health', timeout=10)
-    print('Health check passed:', r.status)
-except Exception as e:
-    print('Health check failed:', e); sys.exit(1)
-"
+          docker exec lead-engine python3 -c "import urllib.request; r=urllib.request.urlopen('http://localhost:8080/health',timeout=10); print('Health check passed:', r.status)"
