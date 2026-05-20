@@ -11,7 +11,6 @@ env:
   CR_REGISTRY: mittul-ap-southeast-3.cr.bytepluses.com
   CR_NAMESPACE: lead-engine
   CR_REPO: lead-engine
-  NAMESPACE: lead-engine
 
 jobs:
   # ─── 1. Build & push image ────────────────────────────────────────────────
@@ -56,65 +55,78 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ─── 2. Deploy ────────────────────────────────────────────────────────────
+  # ─── 2. Deploy to ECS ─────────────────────────────────────────────────────
   deploy:
-    name: Deploy → lead-engine
+    name: Deploy to ECS
     needs: build-and-push
     runs-on: ubuntu-latest
     environment: production
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Debug connectivity
+      - name: Set up SSH key
         run: |
-          echo "Runner IP: $(curl -s https://ifconfig.me)"
-          nc -zv 163.7.5.36 6443 && echo "Port 6443 OPEN" || echo "Port 6443 BLOCKED"
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.ECS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
-      - name: Configure kubectl
+      - name: Deploy via SSH
+        env:
+          FULL_IMAGE: ${{ needs.build-and-push.outputs.full_image }}
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=30 \
+            "${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }}" << ENDSSH
+          set -euo pipefail
 
-      - name: Create/update CR pull secret
+          # Pull from Byteplus CR
+          echo "${{ secrets.CR_PASSWORD }}" | \
+            docker login ${{ env.CR_REGISTRY }} \
+              -u "${{ secrets.CR_USERNAME }}" --password-stdin
+
+          docker pull "${FULL_IMAGE}"
+
+          # Stop and remove the existing container (ignore errors if not running)
+          docker stop lead-engine 2>/dev/null || true
+          docker rm   lead-engine 2>/dev/null || true
+
+          mkdir -p /opt/lead-engine/output
+
+          # Run the new container
+          docker run -d \
+            --name lead-engine \
+            --restart unless-stopped \
+            -p 8080:8080 \
+            -v /opt/lead-engine/output:/app/output \
+            -e LLM_PROVIDER=openai \
+            -e LLM_API_BASE=https://ark.ap-southeast.bytepluses.com/api/v3 \
+            -e LLM_MODEL=seed-2-0-pro-260328 \
+            -e LLM_TIMEOUT_SECONDS=30 \
+            -e APOLLO_ENABLED=false \
+            -e APOLLO_TIMEOUT_SECONDS=10 \
+            -e APP_USERNAME=admin \
+            -e LLM_API_KEY="${{ secrets.LLM_API_KEY }}" \
+            -e APOLLO_API_KEY="${{ secrets.APOLLO_API_KEY }}" \
+            -e APP_PASSWORD="${{ secrets.APP_PASSWORD }}" \
+            -e SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
+            -e INSTANTLY_API_KEY="${{ secrets.INSTANTLY_API_KEY }}" \
+            -e INSTANTLY_CAMPAIGN_ID="${{ secrets.INSTANTLY_CAMPAIGN_ID }}" \
+            -e INSTANTLY_SCORE_THRESHOLD="${{ secrets.INSTANTLY_SCORE_THRESHOLD }}" \
+            -e PLACEHOLDER_EMAIL="${{ secrets.PLACEHOLDER_EMAIL }}" \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            "${FULL_IMAGE}"
+
+          # Verify
+          docker ps --filter name=lead-engine --format "table {{.ID}}\t{{.Status}}\t{{.Ports}}"
+
+          # Prune dangling images to reclaim disk space
+          docker image prune -f
+          ENDSSH
+
+      - name: Health check
         run: |
-          kubectl create secret docker-registry byteplus-cr-secret \
-            --namespace ${{ env.NAMESPACE }} \
-            --docker-server=${{ env.CR_REGISTRY }} \
-            --docker-username=${{ secrets.CR_USERNAME }} \
-            --docker-password=${{ secrets.CR_PASSWORD }} \
-            --dry-run=client -o yaml | kubectl apply --validate=false -f -
-
-      - name: Create/update app secrets
-        run: |
-          kubectl create secret generic lead-engine-secrets \
-            --namespace ${{ env.NAMESPACE }} \
-            --from-literal=LLM_API_KEY="${{ secrets.LLM_API_KEY }}" \
-            --from-literal=APOLLO_API_KEY="${{ secrets.APOLLO_API_KEY }}" \
-            --from-literal=APP_PASSWORD="${{ secrets.APP_PASSWORD }}" \
-            --from-literal=SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
-            --from-literal=INSTANTLY_API_KEY="${{ secrets.INSTANTLY_API_KEY }}" \
-            --from-literal=INSTANTLY_CAMPAIGN_ID="${{ secrets.INSTANTLY_CAMPAIGN_ID }}" \
-            --from-literal=INSTANTLY_SCORE_THRESHOLD="${{ secrets.INSTANTLY_SCORE_THRESHOLD }}" \
-            --from-literal=PLACEHOLDER_EMAIL="${{ secrets.PLACEHOLDER_EMAIL }}" \
-            --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            --dry-run=client -o yaml | kubectl apply --validate=false -f -
-
-      - name: Apply manifests
-        run: kubectl apply --validate=false -f k8s/
-
-      - name: Roll out new image
-        run: |
-          kubectl set image deployment/lead-engine \
-            lead-engine=${{ needs.build-and-push.outputs.full_image }} \
-            --namespace ${{ env.NAMESPACE }}
-          kubectl rollout status deployment/lead-engine \
-            --namespace ${{ env.NAMESPACE }} \
-            --timeout=300s
-
-      - name: Verify
-        run: |
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app=lead-engine
-          kubectl get svc -n ${{ env.NAMESPACE }}
+          sleep 20
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }}" \
+            "curl -sf http://localhost:8080/health && echo 'Health check passed'"
