@@ -108,6 +108,4 @@ jobs:
       - name: Health check
         run: |
           sleep 20
-          docker logs lead-engine --tail 50
-          docker inspect lead-engine --format='State: {{.State.Status}} | Restarts: {{.RestartCount}}'
           docker exec lead-engine curl -sf http://localhost:8080/health && echo "Health check passed"

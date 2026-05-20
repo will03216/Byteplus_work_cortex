@@ -68,7 +68,7 @@ APP_PASSWORD              = os.getenv("APP_PASSWORD", "changeme")
 SESSION_SECRET            = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 INSTANTLY_API_KEY         = os.getenv("INSTANTLY_API_KEY", "")
 INSTANTLY_CAMPAIGN_ID     = os.getenv("INSTANTLY_CAMPAIGN_ID", "")
-INSTANTLY_SCORE_THRESHOLD = int(os.getenv("INSTANTLY_SCORE_THRESHOLD", "75"))
+INSTANTLY_SCORE_THRESHOLD = int(os.getenv("INSTANTLY_SCORE_THRESHOLD") or "75")
 PLACEHOLDER_EMAIL         = os.getenv("PLACEHOLDER_EMAIL", "mittulmadaan91@gmail.com")
 
 
