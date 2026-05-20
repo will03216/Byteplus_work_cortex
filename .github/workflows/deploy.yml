@@ -56,43 +56,27 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ─── 2. Deploy to ECS ─────────────────────────────────────────────────────
+  # Runs on the self-hosted runner container on the ECS instance itself.
+  # No inbound SSH needed — the runner connects outbound to GitHub over HTTPS.
   deploy:
     name: Deploy to ECS
     needs: build-and-push
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     environment: production
 
     steps:
-      - name: Set up SSH key
+      - name: Pull new image from Byteplus CR
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.ECS_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-      - name: Deploy via SSH
-        env:
-          FULL_IMAGE: ${{ needs.build-and-push.outputs.full_image }}
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=30 \
-            "${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }}" << ENDSSH
-          set -euo pipefail
-
-          # Pull from Byteplus CR
           echo "${{ secrets.CR_PASSWORD }}" | \
             docker login ${{ env.CR_REGISTRY }} \
               -u "${{ secrets.CR_USERNAME }}" --password-stdin
+          docker pull "${{ needs.build-and-push.outputs.full_image }}"
 
-          docker pull "${FULL_IMAGE}"
-
-          # Stop and remove the existing container (ignore errors if not running)
+      - name: Swap container
+        run: |
           docker stop lead-engine 2>/dev/null || true
           docker rm   lead-engine 2>/dev/null || true
-
           mkdir -p /opt/lead-engine/output
-
-          # Run the new container
           docker run -d \
             --name lead-engine \
             --restart unless-stopped \
@@ -114,19 +98,14 @@ jobs:
             -e INSTANTLY_SCORE_THRESHOLD="${{ secrets.INSTANTLY_SCORE_THRESHOLD }}" \
             -e PLACEHOLDER_EMAIL="${{ secrets.PLACEHOLDER_EMAIL }}" \
             -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            "${FULL_IMAGE}"
+            "${{ needs.build-and-push.outputs.full_image }}"
 
-          # Verify
+      - name: Verify
+        run: |
           docker ps --filter name=lead-engine --format "table {{.ID}}\t{{.Status}}\t{{.Ports}}"
-
-          # Prune dangling images to reclaim disk space
           docker image prune -f
-          ENDSSH
 
       - name: Health check
         run: |
           sleep 20
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            "${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }}" \
-            "curl -sf http://localhost:8080/health && echo 'Health check passed'"
+          curl -sf http://localhost:8080/health && echo "Health check passed"
