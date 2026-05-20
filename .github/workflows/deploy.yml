@@ -108,4 +108,4 @@ jobs:
       - name: Health check
         run: |
           sleep 20
-          curl -sf http://localhost:8080/health && echo "Health check passed"
+          docker exec lead-engine curl -sf http://localhost:8080/health && echo "Health check passed"
