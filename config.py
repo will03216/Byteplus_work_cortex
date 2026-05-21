@@ -50,7 +50,7 @@ DISQUALIFIED_THRESHOLD = 60   # score <  60 → disqualified  (else → review)
 # ── Concurrency & reliability ────────────────────────────────────────────────
 DEFAULT_CONCURRENCY    = 10
 MAX_RETRIES            = 2
-LEAD_TIMEOUT_SECONDS = 90   # entire per-lead pipeline deadline (enrich + stage1 + stage2 + retries)
+LEAD_TIMEOUT_SECONDS = int(os.getenv("LEAD_TIMEOUT_SECONDS", "240"))  # enrich + stage1 + stage2 + retries
 
 # ── Campaign defaults ────────────────────────────────────────────────────────
 DEFAULT_CAMPAIGN = os.getenv("DEFAULT_CAMPAIGN", "seedance")
