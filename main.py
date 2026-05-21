@@ -28,8 +28,7 @@ load_dotenv()
 import config
 from campaigns import load_all_campaigns, get_campaign, CampaignContext
 from llm import LiteLLMClient
-from normalization import normalize_batch, LeadInput
-from normalization.csv_loader import load_csv
+from normalization import normalize_batch, LeadInput, load_csv, load_json
 from tools import enrich_lead, EnrichedLead
 from claude import extract_evidence, EvidenceOutput, make_decision, DecisionOutput
 from router import route_decision
@@ -208,8 +207,7 @@ async def run_batch(
     if suffix == ".csv":
         raw_leads: list[dict] = load_csv(input_path)
     elif suffix == ".json":
-        with open(input_path, encoding="utf-8") as f:
-            raw_leads = json.load(f)
+        raw_leads = load_json(input_path)
     else:
         raise ValueError(f"Unsupported input format '{suffix}'. Use .json or .csv")
     # #region debug-point D:raw-load
@@ -268,7 +266,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input", "-i",
         required=True,
-        help="Path to input JSON file (array of lead objects)",
+        help="Path to input CSV or JSON file",
     )
     parser.add_argument(
         "--output-dir", "-o",

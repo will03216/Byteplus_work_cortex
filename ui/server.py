@@ -434,6 +434,13 @@ def _safe_json_object(text: str, fallback: Optional[dict] = None) -> dict:
     return value if isinstance(value, dict) else dict(fallback)
 
 
+def _get_supported_upload_suffix(upload: UploadFile) -> str:
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix in {".csv", ".json"}:
+        return suffix
+    raise HTTPException(status_code=400, detail="Unsupported file type. Upload a .csv or .json file.")
+
+
 async def _sync_seedance_threshold_cache(campaign_id: str, qt: int, dt: int) -> None:
     if campaign_id == "seedance":
         _settings["qualified_threshold"] = qt
@@ -591,9 +598,10 @@ async def run_pipeline(request: Request, file: UploadFile = File(...), concurren
     _require_auth(request)
     run_id  = str(uuid.uuid4())
     content = await file.read()
+    suffix = _get_supported_upload_suffix(file)
 
     # Save upload to a temp file for main.py to read
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(content)
     tmp.close()
 
@@ -605,7 +613,7 @@ async def run_pipeline(request: Request, file: UploadFile = File(...), concurren
     if _pool:
         campaign_version, policy_version = await _get_effective_versions(campaign)
         await store.insert_run(
-            _pool, run_id, file.filename or "upload.csv", concurrency,
+            _pool, run_id, file.filename or f"upload{suffix}", concurrency,
             campaign_id=campaign, campaign_version=campaign_version, policy_version=policy_version,
         )
 
@@ -628,8 +636,9 @@ async def run_pipeline_campaign(request: Request, campaign_id: str,
 
     run_id  = str(uuid.uuid4())
     content = await file.read()
+    suffix = _get_supported_upload_suffix(file)
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(content)
     tmp.close()
 
@@ -639,7 +648,7 @@ async def run_pipeline_campaign(request: Request, campaign_id: str,
     if _pool:
         campaign_version, policy_version = await _get_effective_versions(campaign_id)
         await store.insert_run(
-            _pool, run_id, file.filename or "upload.csv", concurrency,
+            _pool, run_id, file.filename or f"upload{suffix}", concurrency,
             campaign_id=campaign_id, campaign_version=campaign_version, policy_version=policy_version,
         )
 

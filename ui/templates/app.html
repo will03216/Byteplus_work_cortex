@@ -529,7 +529,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
             <div class="page-meta" id="campaign-view-meta">Campaign runs</div>
           </div>
           <div class="toolbar-actions">
-            <button class="toolbar-btn primary" onclick="goToUpload(currentCampaignId)">Upload CSV</button>
+            <button class="toolbar-btn primary" onclick="goToUpload(currentCampaignId)">Upload Leads</button>
           </div>
         </div>
 
@@ -876,8 +876,8 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
   <div class="upload-modal">
     <div class="runs-modal-head">
       <div>
-        <div class="runs-modal-title">Upload CSV</div>
-        <div class="runs-modal-sub" id="upload-modal-sub">Trigify export for the active campaign</div>
+        <div class="runs-modal-title">Upload Leads File</div>
+        <div class="runs-modal-sub" id="upload-modal-sub">Trigify CSV or normalized JSON for the active campaign</div>
       </div>
       <button class="runs-modal-close" onclick="closeUploadModal()">×</button>
     </div>
@@ -886,14 +886,14 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
         <div class="upload-card">
           <div>
             <h2>Upload leads</h2>
-            <p>Trigify CSV export · each run is fully isolated</p>
+            <p>Trigify CSV export or normalized JSON array · each run is fully isolated</p>
           </div>
 
           <div id="dropzone" class="dropzone">
             <div id="drop-hint" style="display:flex;flex-direction:column;align-items:center;gap:10px;">
               <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <div class="drop-hint-text">Drop CSV here or click to browse</div>
-              <div class="drop-hint-sub">.csv · Trigify format</div>
+              <div class="drop-hint-text">Drop CSV or JSON here or click to browse</div>
+              <div class="drop-hint-sub">.csv Trigify export or .json normalized lead array</div>
             </div>
             <div id="file-info" class="file-info">
               <svg class="file-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -901,7 +901,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
               <div id="file-size-text" class="file-size-text">—</div>
             </div>
           </div>
-          <input type="file" id="file-input" accept=".csv" style="display:none">
+          <input type="file" id="file-input" accept=".csv,.json,application/json,text/csv" style="display:none">
 
           <div class="option-row">
             <div class="option-label">Campaign <span>product context</span></div>
@@ -1011,6 +1011,13 @@ dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.classList.
 fileInput.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
 
 function setFile(file) {
+  const fileName = (file?.name || '').toLowerCase();
+  if (!fileName.endsWith('.csv') && !fileName.endsWith('.json')) {
+    selectedFile = null;
+    document.getElementById('submit-btn').disabled = true;
+    alert('Unsupported file type. Upload a .csv or .json file.');
+    return;
+  }
   selectedFile = file;
   document.getElementById('drop-hint').style.display = 'none';
   document.getElementById('file-info').classList.add('show');
@@ -1035,7 +1042,15 @@ async function startRun() {
   fd.append('campaign', campaign);
   resetProgress();
   show('s-progress');
-  const { run_id } = await fetch('/api/run', { method:'POST', body:fd }).then(r => r.json());
+  const response = await fetch('/api/run', { method:'POST', body:fd });
+  const payload = await response.json();
+  if (!response.ok) {
+    alert(payload.detail || payload.error || 'Failed to start run.');
+    closeUploadModal();
+    show('s-upload');
+    return;
+  }
+  const { run_id } = payload;
   currentRunId = run_id;
   setRunIdInUrl(run_id);
   connectSSE(run_id);
@@ -1043,7 +1058,7 @@ async function startRun() {
 
 async function viewExisting() {
   const runs = await fetch('/api/runs').then(r => r.json());
-  if (!runs.length) { alert('No runs found. Upload a CSV to get started.'); return; }
+  if (!runs.length) { alert('No runs found. Upload a CSV or JSON file to get started.'); return; }
   await loadRun(runs[0].run_id);
 }
 
@@ -2079,7 +2094,7 @@ function updateUploadModalContext(campaignId = null) {
   const activeId = campaignId || document.getElementById('campaign-select')?.value || getDefaultCampaignId();
   const activeCampaign = campaigns.find(c => c.id === activeId) || { id: activeId, name: formatCampaignName(activeId) };
   const sub = document.getElementById('upload-modal-sub');
-  if (sub) sub.textContent = `Trigify export for ${formatCampaignName(activeCampaign.id, activeCampaign.name)}`;
+  if (sub) sub.textContent = `Trigify CSV or normalized JSON for ${formatCampaignName(activeCampaign.id, activeCampaign.name)}`;
 }
 
 function resetUploadForm() {
@@ -2130,7 +2145,7 @@ function openLatestResults() {
   const scopedRuns = getRunsForCampaign(currentCampaignId);
   const targetRun = scopedRuns[0] || allRuns[0];
   if (!targetRun) {
-    alert('No runs found yet. Upload a CSV to get started.');
+    alert('No runs found yet. Upload a CSV or JSON file to get started.');
     return;
   }
   loadRun(targetRun.run_id);
@@ -2191,7 +2206,7 @@ function renderHome() {
             <div class="campaign-stat-value" style="color:var(--green);">${totalQualified}</div>
           </div>
         </div>
-        <div class="panel-sub">${lastRun ? `Latest run ${formatRunDateTime(lastRun.created_at)}` : 'Upload a CSV to start this campaign.'}</div>
+        <div class="panel-sub">${lastRun ? `Latest run ${formatRunDateTime(lastRun.created_at)}` : 'Upload a CSV or JSON file to start this campaign.'}</div>
       </div>`;
   }).join('') || '<div class="empty-state">No campaigns available.</div>';
 
@@ -2224,7 +2239,7 @@ function renderCampaignView() {
   const el = document.getElementById('campaign-runs-list');
   el.innerHTML = scopedRuns.length
     ? scopedRuns.map(run => renderRunItem(run, { current: run.run_id === currentRunId, maxName: 42 })).join('')
-    : '<div class="empty-state">No runs yet. Upload a CSV to create your first run.</div>';
+    : '<div class="empty-state">No runs yet. Upload a CSV or JSON file to create your first run.</div>';
 }
 
 function renderResultsRuns(runs) {
@@ -2458,7 +2473,7 @@ async function startRun() {
 async function viewExisting() {
   const runs = await fetch('/api/runs').then(r => r.json());
   if (!runs.length) {
-    alert('No runs found. Upload a CSV to get started.');
+    alert('No runs found. Upload a CSV or JSON file to get started.');
     return;
   }
   closeUploadModal();

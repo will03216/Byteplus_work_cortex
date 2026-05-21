@@ -75,6 +75,24 @@ def load_artifact(lead_id: str, kind: str) -> Optional[dict]:
     return None
 
 
+def get_upload_suffix(filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in {".csv", ".json"}:
+        return suffix
+    raise ValueError("Unsupported file type. Upload a .csv or .json file.")
+
+
+def preview_uploaded_file(uploaded) -> tuple[pd.DataFrame, str]:
+    suffix = get_upload_suffix(uploaded.name)
+    if suffix == ".csv":
+        return pd.read_csv(uploaded), "csv"
+
+    data = json.load(uploaded)
+    if not isinstance(data, list):
+        raise ValueError("JSON upload must contain an array of lead objects.")
+    return pd.json_normalize(data), "json"
+
+
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Seedance Lead Engine",
@@ -526,19 +544,24 @@ elif page == "Run Pipeline":
     col_left, col_right = st.columns([2, 1])
 
     with col_left:
-        st.subheader("Upload a leads CSV")
+        st.subheader("Upload a leads CSV or JSON")
         uploaded = st.file_uploader(
-            "Drag and drop a Trigify CSV export",
-            type=["csv"],
-            help="The CSV should be in the Trigify format — see existing files in the project root.",
+            "Drag and drop a Trigify CSV export or normalized JSON file",
+            type=["csv", "json"],
+            help="Upload a Trigify CSV export or a JSON array of normalized lead objects.",
         )
 
         if uploaded:
-            st.success(f"Loaded: **{uploaded.name}** ({uploaded.size / 1024:.1f} KB)")
-            preview_df = pd.read_csv(uploaded)
-            uploaded.seek(0)
-            st.markdown(f"**{len(preview_df)} rows**, {len(preview_df.columns)} columns")
-            st.dataframe(preview_df.head(5), use_container_width=True)
+            try:
+                preview_df, file_kind = preview_uploaded_file(uploaded)
+                uploaded.seek(0)
+                st.success(f"Loaded: **{uploaded.name}** ({uploaded.size / 1024:.1f} KB)")
+                st.markdown(f"**{len(preview_df)} rows**, {len(preview_df.columns)} columns · `{file_kind}`")
+                st.dataframe(preview_df.head(5), use_container_width=True)
+            except Exception as exc:
+                uploaded.seek(0)
+                st.error(str(exc))
+                uploaded = None
 
     with col_right:
         st.subheader("Settings")
@@ -558,8 +581,9 @@ elif page == "Run Pipeline":
         )
 
     if run_btn and uploaded:
+        suffix = get_upload_suffix(uploaded.name)
         # Save uploaded file to a temp location
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode="wb") as tmp:
             tmp.write(uploaded.read())
             tmp_path = tmp.name
 
