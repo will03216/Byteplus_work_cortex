@@ -1443,11 +1443,12 @@ async def export_run(request: Request, run_id: str):
     import io
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["name", "company", "decision", "score", "email_subject", "email_body"])
+    writer.writerow(["name", "company", "company_url", "title", "linkedin_url", "decision", "score", "email_subject", "email_body"])
     for l in leads:
         email = _build_email(l)
-        writer.writerow([l["name"], l["company"], l["decision"], l["score"],
-                         email["subject"], email["body"]])
+        writer.writerow([l["name"], l["company"], l.get("company_website", ""),
+                         l.get("role") or l.get("title", ""), l.get("linkedin_url", ""),
+                         l["decision"], l["score"], email["subject"], email["body"]])
 
     filename = f"leads-{run_id[:8]}.csv"
     return StreamingResponse(
