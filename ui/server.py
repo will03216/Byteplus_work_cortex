@@ -318,6 +318,8 @@ def _read_run_files(run_dir: Path) -> list:
                     "unknowns":       ev.get("unknowns", []),
                     "hard_disqualifiers": ev.get("hard_disqualifiers", []),
                     "reasoning":      art.get("reasoning_summary") or row.get("reasoning_summary", ""),
+                    "email":          enrichment.get("email") or row.get("email", "") or "",
+                    "email_status":   enrichment.get("email_status") or "",
                     "raw_input":      input_payload,
                     "enrichment_snapshot": enrichment,
                     "evidence_snapshot": ev,
@@ -333,6 +335,13 @@ def _summarize_run_dir(run_dir: Path) -> dict:
     for lead in leads:
         if lead["decision"] in counts:
             counts[lead["decision"]] += 1
+    meta: dict = {}
+    meta_path = run_dir / "run_meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return {
         "run_id": run_dir.name,
         "filename": run_dir.name,
@@ -342,6 +351,7 @@ def _summarize_run_dir(run_dir: Path) -> dict:
         "n_review": counts["review"],
         "n_disqualified": counts["disqualified"],
         "created_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+        "apollo_enabled": bool(meta.get("apollo_enabled", False)),
     }
 
 
@@ -610,12 +620,17 @@ async def run_pipeline(request: Request, file: UploadFile = File(...), concurren
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Persist run record with campaign_id
+    apollo_on = _settings.get("apollo_enabled", False)
     if _pool:
         campaign_version, policy_version = await _get_effective_versions(campaign)
         await store.insert_run(
             _pool, run_id, file.filename or f"upload{suffix}", concurrency,
             campaign_id=campaign, campaign_version=campaign_version, policy_version=policy_version,
+            apollo_enabled=apollo_on,
         )
+    (run_dir / "run_meta.json").write_text(
+        json.dumps({"apollo_enabled": apollo_on, "campaign_id": campaign}), encoding="utf-8"
+    )
 
     _jobs[run_id] = {"lines": [], "status": "running", "returncode": None, "campaign_id": campaign}
     asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency, campaign_id=campaign))
@@ -645,12 +660,17 @@ async def run_pipeline_campaign(request: Request, campaign_id: str,
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    apollo_on = _settings.get("apollo_enabled", False)
     if _pool:
         campaign_version, policy_version = await _get_effective_versions(campaign_id)
         await store.insert_run(
             _pool, run_id, file.filename or f"upload{suffix}", concurrency,
             campaign_id=campaign_id, campaign_version=campaign_version, policy_version=policy_version,
+            apollo_enabled=apollo_on,
         )
+    (run_dir / "run_meta.json").write_text(
+        json.dumps({"apollo_enabled": apollo_on, "campaign_id": campaign_id}), encoding="utf-8"
+    )
 
     _jobs[run_id] = {"lines": [], "status": "running", "returncode": None, "campaign_id": campaign_id}
     asyncio.create_task(_run_job(run_id, tmp.name, run_dir, concurrency, campaign_id=campaign_id))

@@ -438,8 +438,9 @@ elif page == "Leads":
         selected_id = lead_ids[idx]
         row = sorted_leads.iloc[idx]
 
-        evidence = load_artifact(selected_id, "evidence")
-        decision = load_artifact(selected_id, "decision")
+        evidence   = load_artifact(selected_id, "evidence")
+        decision   = load_artifact(selected_id, "decision")
+        enrichment = load_artifact(selected_id, "enrichment")
 
         color = score_color(row["score"])
 
@@ -451,6 +452,13 @@ elif page == "Leads":
             st.markdown(badge(row["decision"]), unsafe_allow_html=True)
             st.markdown(f"<br><span style='font-size:48px;font-weight:800;color:{color};'>{int(row['score'])}</span><span style='color:{COLORS['muted']};'>/100</span>", unsafe_allow_html=True)
             st.markdown(f"Confidence: **{row.get('confidence', '—')}**")
+
+            if enrichment:
+                _email        = enrichment.get("email") or ""
+                _email_status = enrichment.get("email_status") or ""
+                if _email:
+                    status_label = f" `{_email_status}`" if _email_status else ""
+                    st.markdown(f"Email: **{_email}**{status_label}")
 
             if decision:
                 st.markdown("#### Score Breakdown")

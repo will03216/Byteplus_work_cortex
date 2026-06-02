@@ -65,18 +65,21 @@ ARTIFACTS_DIR    = "artifacts"
 # ── CSV column schemas ───────────────────────────────────────────────────────
 QUALIFIED_COLS = [
     "lead_id", "person_name", "title", "company_name",
+    "email", "email_status",
     "decision", "score", "confidence",
     "segment", "use_case", "reasoning_summary",
 ]
 
 DISQUALIFIED_COLS = [
     "lead_id", "person_name", "title", "company_name",
+    "email", "email_status",
     "decision", "score", "confidence",
     "disqualification_reasons", "reasoning_summary",
 ]
 
 REVIEW_COLS = [
     "lead_id", "person_name", "title", "company_name",
+    "email", "email_status",
     "decision", "score", "confidence",
     "missing_data", "reasoning_summary",
 ]

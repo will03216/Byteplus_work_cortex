@@ -36,6 +36,7 @@ class LeadInput(BaseModel):
     company_domain:    str
     company_size:      Optional[str] = None
     linkedin_url:      Optional[str] = None
+    email:             Optional[str] = None
     signal_text:       str
     signal_type:       str
     signal_timestamp:  str

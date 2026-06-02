@@ -62,6 +62,7 @@ def _write_artifact(artifacts_dir: Path, lead_id: str, suffix: str, data: dict) 
 
 def _build_csv_row(
     lead:     LeadInput,
+    enriched: EnrichedLead,
     evidence: EvidenceOutput,
     decision: DecisionOutput,
     routing:  Literal["qualified", "disqualified", "review"],
@@ -71,6 +72,8 @@ def _build_csv_row(
         "person_name":  lead.person_name,
         "title":        lead.title,
         "company_name": lead.company_name,
+        "email":        enriched.email or "",
+        "email_status": enriched.email_status or "",
         "decision":     routing,
         "score":        decision.score,
         "confidence":   decision.confidence,
@@ -127,7 +130,7 @@ async def write_result(
         "disqualified": config.DISQUALIFIED_COLS,
         "review":       config.REVIEW_COLS,
     }[routing]
-    row = _build_csv_row(lead, evidence, decision, routing)
+    row = _build_csv_row(lead, enriched, evidence, decision, routing)
 
     async with _csv_lock:
         with open(csv_path, "a", newline="", encoding="utf-8") as f:

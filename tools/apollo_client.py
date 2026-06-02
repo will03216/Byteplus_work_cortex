@@ -22,10 +22,19 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _APOLLO_ENRICH_URL = "https://api.apollo.io/api/v1/organizations/enrich"
+_APOLLO_PEOPLE_URL = "https://api.apollo.io/api/v1/people/match"
 
 _CACHE_DDL = """
 CREATE TABLE IF NOT EXISTS apollo_cache (
     domain     TEXT        PRIMARY KEY,
+    data       JSONB       NOT NULL DEFAULT '{}',
+    cached_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+_PEOPLE_CACHE_DDL = """
+CREATE TABLE IF NOT EXISTS apollo_people_cache (
+    cache_key  TEXT        PRIMARY KEY,
     data       JSONB       NOT NULL DEFAULT '{}',
     cached_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 )
@@ -57,6 +66,7 @@ async def _ensure_pool():
 
         _pool = await asyncpg.create_pool(db_url, init=_init, min_size=1, max_size=3)
         await _pool.execute(_CACHE_DDL)
+        await _pool.execute(_PEOPLE_CACHE_DDL)
         logger.info("Apollo cache: DB connection established")
     except Exception as exc:
         logger.warning("Apollo cache: DB unavailable (%s) — cache disabled", exc)
@@ -121,7 +131,103 @@ async def _call_apollo(api_key: str, timeout: int, **params) -> dict:
     return {}
 
 
+async def _people_cache_get(key: str) -> Optional[dict]:
+    pool = await _ensure_pool()
+    if not pool:
+        return None
+    try:
+        row = await pool.fetchrow(
+            "SELECT data FROM apollo_people_cache WHERE cache_key = $1", key
+        )
+        return row["data"] if row else None
+    except Exception as exc:
+        logger.debug("Apollo people cache read error: %s", exc)
+        return None
+
+
+async def _people_cache_set(key: str, data: dict) -> None:
+    pool = await _ensure_pool()
+    if not pool:
+        return
+    try:
+        await pool.execute(
+            """INSERT INTO apollo_people_cache (cache_key, data)
+               VALUES ($1, $2)
+               ON CONFLICT (cache_key) DO UPDATE SET data = $2, cached_at = now()""",
+            key,
+            data,
+        )
+    except Exception as exc:
+        logger.debug("Apollo people cache write error: %s", exc)
+
+
 # ── Public interface ──────────────────────────────────────────────────────────
+
+async def fetch_person(
+    linkedin_url: str = "",
+    person_name: str = "",
+    domain: str = "",
+) -> dict:
+    """
+    Return Apollo person data (email, email_status, etc.) for a contact.
+
+    Lookup priority:
+      1. linkedin_url alone — most reliable, globally unique
+      2. person_name + domain — fallback when no LinkedIn URL
+
+    Returns {} when APOLLO_ENABLED is not set, no API key, or no usable inputs.
+    """
+    if os.getenv("APOLLO_ENABLED", "false").lower() not in ("true", "1", "yes"):
+        return {}
+
+    api_key = os.getenv("APOLLO_API_KEY")
+    if not api_key:
+        return {}
+
+    # Internal LinkedIn member IDs (/in/ACoAA...) are not indexed by Apollo — fall back to name+domain
+    if linkedin_url and "/ACoAA" in linkedin_url:
+        linkedin_url = ""
+
+    if not linkedin_url and not (person_name and domain):
+        return {}
+
+    cache_key = linkedin_url or f"{person_name}@{domain}"
+    timeout = int(os.getenv("APOLLO_TIMEOUT_SECONDS", "10"))
+
+    cached = await _people_cache_get(cache_key)
+    if cached is not None:
+        logger.debug("Apollo people cache HIT: %s", cache_key)
+        return cached
+
+    logger.debug("Apollo people cache MISS: %s — calling API", cache_key)
+
+    params: dict = {}
+    if linkedin_url:
+        params["linkedin_url"] = linkedin_url
+    else:
+        params["name"] = person_name
+        params["domain"] = domain
+
+    result: dict = {}
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            verify=_ssl_verify(),
+            headers={"X-Api-Key": api_key, "Content-Type": "application/json"},
+        ) as client:
+            resp = await client.post(_APOLLO_PEOPLE_URL, json=params)
+            if resp.status_code == 200:
+                result = resp.json().get("person") or {}
+            elif resp.status_code not in (404, 422):
+                logger.warning(
+                    "Apollo people API returned %d for params=%s", resp.status_code, params
+                )
+    except Exception as exc:
+        logger.warning("Apollo people API call failed (%s): %s", params, exc)
+
+    await _people_cache_set(cache_key, result)
+    return result
+
 
 async def fetch_company(domain: str = "", company_name: str = "") -> dict:
     """

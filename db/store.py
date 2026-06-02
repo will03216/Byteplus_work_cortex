@@ -259,6 +259,7 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS manual_email_status TEXT")
         # Email status on runs
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS email_status TEXT DEFAULT 'not_sent'")
+        await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS apollo_enabled BOOLEAN DEFAULT FALSE")
         # Campaign support columns (idempotent migration)
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id)")
         await conn.execute("ALTER TABLE exclusions ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id)")
@@ -316,11 +317,12 @@ async def insert_run(
     campaign_id: str = "seedance",
     campaign_version: str = "v1",
     policy_version: str = "v1",
+    apollo_enabled: bool = False,
 ) -> None:
     await pool.execute(
-        """INSERT INTO runs (run_id, campaign_id, filename, concurrency, campaign_version, policy_version)
-           VALUES ($1, $2, $3, $4, $5, $6)""",
-        run_id, campaign_id, filename, concurrency, campaign_version, policy_version,
+        """INSERT INTO runs (run_id, campaign_id, filename, concurrency, campaign_version, policy_version, apollo_enabled)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+        run_id, campaign_id, filename, concurrency, campaign_version, policy_version, apollo_enabled,
     )
 
 
@@ -349,7 +351,7 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
         rows = await pool.fetch(
             """
             SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
-                   r.created_at, r.completed_at, r.email_status,
+                   r.created_at, r.completed_at, r.email_status, r.apollo_enabled,
                    r.campaign_version, r.policy_version,
                    COUNT(l.id) AS n_total,
                    COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
@@ -367,7 +369,7 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
         rows = await pool.fetch(
             """
             SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
-                   r.created_at, r.completed_at, r.email_status,
+                   r.created_at, r.completed_at, r.email_status, r.apollo_enabled,
                    r.campaign_version, r.policy_version,
                    COUNT(l.id) AS n_total,
                    COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
@@ -393,6 +395,7 @@ async def list_runs(pool: asyncpg.Pool, campaign_id: Optional[str] = None) -> li
             "n_disqualified": r["n_disqualified"],
             "created_at":     r["created_at"].isoformat() if r["created_at"] else None,
             "email_status":   r["email_status"] or "not_sent",
+            "apollo_enabled": bool(r["apollo_enabled"]),
         }
         for r in rows
     ]
@@ -402,7 +405,7 @@ async def get_run(pool: asyncpg.Pool, run_id: str) -> Optional[dict]:
     row = await pool.fetchrow(
         """
         SELECT r.run_id, r.campaign_id, r.filename, r.status, r.lead_count,
-               r.created_at, r.completed_at, r.email_status,
+               r.created_at, r.completed_at, r.email_status, r.apollo_enabled,
                r.campaign_version, r.policy_version,
                COUNT(l.id) AS n_total,
                COUNT(CASE WHEN l.decision='qualified'    THEN 1 END) AS n_qualified,
@@ -431,6 +434,7 @@ async def get_run(pool: asyncpg.Pool, run_id: str) -> Optional[dict]:
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
         "email_status": row["email_status"] or "not_sent",
+        "apollo_enabled": bool(row["apollo_enabled"]),
     }
 
 
@@ -454,9 +458,9 @@ async def upsert_lead(pool: asyncpg.Pool, run_id: str, lead: dict) -> None:
             signal_type, source_url, decision, score, confidence,
             segment_fit, buyer_fit, pain_fit, workflow_fit, commercial_fit,
             reasoning, use_case, signal_strength,
-            evidence, qual_reasons, disqual_reasons
+            evidence, qual_reasons, disqual_reasons, email
         ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
         )
         ON CONFLICT (run_id, lead_id) DO UPDATE SET
             company_size=$5, industry=$6, linkedin_url=$7, company_website=$8, signal_type=$10, source_url=$11,
@@ -464,7 +468,7 @@ async def upsert_lead(pool: asyncpg.Pool, run_id: str, lead: dict) -> None:
             segment_fit=$15, buyer_fit=$16, pain_fit=$17,
             workflow_fit=$18, commercial_fit=$19,
             reasoning=$20, use_case=$21, signal_strength=$22,
-            evidence=$23, qual_reasons=$24, disqual_reasons=$25
+            evidence=$23, qual_reasons=$24, disqual_reasons=$25, email=$26
         """,
         run_id,
         lead.get("lead_id", lead.get("name", "")),
@@ -491,6 +495,7 @@ async def upsert_lead(pool: asyncpg.Pool, run_id: str, lead: dict) -> None:
         evidence,
         lead.get("reasons", []),
         lead.get("disreasons", []),
+        lead.get("email") or None,
     )
 
 

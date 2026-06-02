@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from normalization.normalizer import LeadInput
 from tools.web_enrichment import scrape_company_website, scrape_linkedin_profile
-from tools.apollo_client import fetch_company
+from tools.apollo_client import fetch_company, fetch_person
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ class EnrichedLead(BaseModel):
     role_seniority:          str             = ""   # "senior" | "mid" | "junior" | "unknown"
     company_website_summary: str             = ""   # scraped homepage text
     linkedin_summary:        str             = ""   # scraped LinkedIn profile text
+    email:                   Optional[str]   = None
+    email_status:            Optional[str]   = None  # "verified" | "likely" | "guessed" | "unavailable"
 
 
 # ── Apollo response parsers ───────────────────────────────────────────────────
@@ -137,6 +139,14 @@ def _parse_recent_signals(data: dict) -> RecentSignals:
     )
 
 
+def _parse_person_email(data: dict) -> tuple[Optional[str], Optional[str]]:
+    if not data:
+        return None, None
+    email = data.get("email") or None
+    status = data.get("email_status") or None
+    return email, status
+
+
 def get_role_seniority(title: str) -> str:
     """
     Lightweight local heuristic.
@@ -181,22 +191,43 @@ async def enrich_lead(lead: LeadInput) -> EnrichedLead:
     """
     role_seniority = get_role_seniority(lead.title)
 
-    # All three network sources run in parallel
-    apollo_data, company_website_summary, linkedin_summary = await asyncio.gather(
+    async def _noop() -> dict:
+        return {}
+
+    # Skip Apollo person lookup if email is already present on the lead
+    person_lookup = (
+        fetch_person(
+            linkedin_url=lead.linkedin_url or "",
+            person_name=lead.person_name,
+            domain=lead.company_domain or "",
+        )
+        if not lead.email
+        else _noop()
+    )
+
+    # All four network sources run in parallel
+    apollo_data, company_website_summary, linkedin_summary, person_data = await asyncio.gather(
         fetch_company(lead.company_domain or "", lead.company_name),
         scrape_company_website(lead.company_domain or ""),
         scrape_linkedin_profile(lead.linkedin_url or ""),
+        person_lookup,
     )
 
     company_profile = _parse_company_profile(apollo_data)
     recent_signals  = _parse_recent_signals(apollo_data)
 
+    email, email_status = (
+        (lead.email, None) if lead.email
+        else _parse_person_email(person_data)
+    )
+
     logger.debug(
-        "Enriched lead_id=%s | seniority=%s | apollo=%s | size=%s | website_chars=%d | linkedin_chars=%d",
+        "Enriched lead_id=%s | seniority=%s | apollo=%s | size=%s | email=%s | website_chars=%d | linkedin_chars=%d",
         lead.lead_id,
         role_seniority,
         "hit" if apollo_data else "miss",
         company_profile.company_size or "unknown",
+        email_status or ("passthrough" if lead.email else "none"),
         len(company_website_summary),
         len(linkedin_summary),
     )
@@ -208,4 +239,6 @@ async def enrich_lead(lead: LeadInput) -> EnrichedLead:
         role_seniority          = role_seniority,
         company_website_summary = company_website_summary,
         linkedin_summary        = linkedin_summary,
+        email                   = email,
+        email_status            = email_status,
     )

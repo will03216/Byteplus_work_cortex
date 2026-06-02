@@ -391,6 +391,9 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
 .apollo-status { font-size:12px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-top:6px; }
 .apollo-status.on  { color:var(--green); }
 .apollo-status.off { color:var(--text3); }
+.apollo-run-badge { font-size:11px; padding:2px 8px; border-radius:4px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-weight:600; display:none; }
+.apollo-run-badge.on  { background:rgba(74,222,128,0.12); color:var(--green); border:1px solid rgba(74,222,128,0.3); }
+.apollo-run-badge.off { background:rgba(148,163,184,0.08); color:var(--text3); border:1px solid rgba(148,163,184,0.2); }
 
 /* ── Skills screen ── */
 .skills-shell { display:flex; flex-direction:column; gap:24px; }
@@ -562,6 +565,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px;">
               <div class="page-title">Lead Qualification</div>
               <span class="campaign-badge" id="page-campaign-badge" style="font-size:11px;padding:2px 10px;border-radius:4px;display:none;"></span>
+              <span class="apollo-run-badge" id="page-apollo-badge"></span>
             </div>
             <div class="page-meta" id="page-meta">—</div>
           </div>
@@ -1265,6 +1269,14 @@ function populateResults(leads, runId) {
     }
   }
 
+  const apolloBadge = document.getElementById('page-apollo-badge');
+  if (apolloBadge) {
+    const apolloOn = runMeta && runMeta.apollo_enabled;
+    apolloBadge.textContent = apolloOn ? 'Apollo ON' : 'Apollo OFF';
+    apolloBadge.className = 'apollo-run-badge ' + (apolloOn ? 'on' : 'off');
+    apolloBadge.style.display = 'inline-block';
+  }
+
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all'));
   document.querySelector('.results-main').scrollTop = 0;
   renderLeads('all');
@@ -1498,9 +1510,18 @@ function renderRow(l, i) {
         ? `<span class="email-sent-badge">✓ Sent to Instantly</span>`
         : '';
     const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
+    const emailAddr = (l.email || '').trim();
+    const emailStatusLabel = l.email_status ? ` <span style="font-size:10px;opacity:0.6;">(${l.email_status})</span>` : '';
+    const emailRow = emailAddr
+      ? `<div class="email-subject" style="margin-bottom:6px;">
+          <span>To: <span>${emailAddr}</span>${emailStatusLabel}</span>
+          <button class="copy-btn" onclick="copyText(${JSON.stringify(emailAddr)},this,'⧉ Copy email')">⧉ Copy email</button>
+        </div>`
+      : '';
     return `<div class="email-preview">
       <div class="email-preview-title">Email Preview</div>
       ${manualTag}
+      ${emailRow}
       <div class="email-subject">
         <span>Subject: <span>${preview.subject}</span></span>
         <button class="copy-btn" onclick="copyEmailField(${lid},'subject',this)">⧉ Copy subject</button>
@@ -1558,6 +1579,19 @@ function renderRow(l, i) {
 function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
 
 let _emailConfirmLeadId = null;
+
+function copyText(text, btn, label) {
+  const doFlash = () => {
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 1800);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(doFlash).catch(() => fallbackCopy(text, doFlash));
+  } else {
+    fallbackCopy(text, doFlash);
+  }
+}
 
 function copyEmailField(leadId, field, btn) {
   const preview = emailPreviews[leadId];
@@ -2340,6 +2374,7 @@ async function loadRun(runId) {
   closeUploadModal();
   currentRunId = runId;
   setRunIdInUrl(runId);
+  if (!allRuns.find(r => r.run_id === runId)) await loadPastRuns();
   const runMeta = getRunMeta(runId);
   if (runMeta && runMeta.campaign_id) currentCampaignId = runMeta.campaign_id;
   const [leads, previews] = await Promise.all([
@@ -2388,6 +2423,14 @@ function populateResults(leads, runId) {
     badge.style.display = 'inline-block';
   } else if (badge) {
     badge.style.display = 'none';
+  }
+
+  const apolloBadge2 = document.getElementById('page-apollo-badge');
+  if (apolloBadge2) {
+    const apolloOn = runMeta && runMeta.apollo_enabled;
+    apolloBadge2.textContent = apolloOn ? 'Apollo ON' : 'Apollo OFF';
+    apolloBadge2.className = 'apollo-run-badge ' + (apolloOn ? 'on' : 'off');
+    apolloBadge2.style.display = 'inline-block';
   }
 
   document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.toggle('active', chip.dataset.filter === 'all'));
