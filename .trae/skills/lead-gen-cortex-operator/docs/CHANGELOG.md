@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0-rc1
+
+Adds optional Apollo.io firmographic enrichment to the standalone runner.
+
+- new `--enable-apollo` / `--apollo-api-key` / `--apollo-timeout` flags, plus
+  `APOLLO_ENABLED` / `APOLLO_API_KEY` / `APOLLO_TIMEOUT_SECONDS` env vars
+- stdlib-only, self-contained Apollo organization-enrich client (domain first,
+  company-name fallback) with a thread-safe per-run cache (no DB dependency)
+- compact firmographic summary attached to each `_enrichment.json` artifact and
+  the Stage 1 payload; `apollo_industry` and `apollo_employees` added to result CSVs
+- disabled by default; missing data stays absent rather than fabricated
+
 ## 1.0.0-rc1
 
 Initial production-ready release candidate for the `lead-gen-cortex-operator` skill bundle.

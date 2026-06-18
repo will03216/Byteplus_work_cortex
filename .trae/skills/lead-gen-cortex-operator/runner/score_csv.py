@@ -14,9 +14,12 @@ What it does:
 6. Writes scored CSV outputs and JSON artifacts
 
 Environment variables:
-- LLM_API_KEY   required
-- LLM_MODEL     required
-- LLM_API_BASE  optional, defaults to OpenAI chat completions endpoint
+- LLM_API_KEY            required
+- LLM_MODEL              required
+- LLM_API_BASE           optional, defaults to OpenAI chat completions endpoint
+- APOLLO_ENABLED         optional, "true" to turn on Apollo.io firmographic enrichment
+- APOLLO_API_KEY         optional, required when Apollo enrichment is enabled
+- APOLLO_TIMEOUT_SECONDS optional, per-request Apollo timeout (default 10)
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ from urllib.request import Request, urlopen
 DEFAULT_PROVIDER = "openai-compatible"
 DEFAULT_OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions"
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
+APOLLO_ENRICH_URL = "https://api.apollo.io/api/v1/organizations/enrich"
+DEFAULT_APOLLO_TIMEOUT = 10
 SUPPORTED_PROVIDERS = {"openai-compatible", "anthropic"}
 MANIFEST_VERSION = 1
 DEFAULT_CONCURRENCY = 2
@@ -188,6 +193,7 @@ class EnrichedLead:
     interaction_label: str
     website_summary: str
     website_title: str
+    apollo_company: dict[str, Any]
     csv_context: dict[str, Any]
 
 
@@ -440,11 +446,118 @@ def fetch_website_summary(domain: str, timeout: int = 8) -> tuple[str, str]:
     return "", ""
 
 
-def enrich_lead(lead: LeadInput, raw_row: dict[str, str], allow_web: bool) -> EnrichedLead:
+# ── Apollo.io firmographic enrichment ──────────────────────────────────────────
+# Self-contained, stdlib-only port of tools/apollo_client.py. Uses a thread-safe
+# in-process cache (no DB) so repeated companies in a run hit the API only once.
+
+_apollo_cache: dict[str, dict[str, Any]] = {}
+_apollo_cache_lock = threading.Lock()
+
+
+def _summarize_apollo_org(org: dict[str, Any]) -> dict[str, Any]:
+    """Reduce a raw Apollo organization object to a compact firmographic summary."""
+    if not org:
+        return {}
+    keywords = org.get("keywords") or []
+    if isinstance(keywords, list):
+        keywords = [str(k) for k in keywords[:12]]
+    else:
+        keywords = []
+    summary = {
+        "name": org.get("name") or "",
+        "primary_domain": org.get("primary_domain") or org.get("website_url") or "",
+        "industry": org.get("industry") or "",
+        "estimated_num_employees": org.get("estimated_num_employees"),
+        "annual_revenue_printed": (
+            org.get("annual_revenue_printed") or org.get("organization_revenue_printed") or ""
+        ),
+        "founded_year": org.get("founded_year"),
+        "linkedin_url": org.get("linkedin_url") or "",
+        "country": org.get("country") or "",
+        "city": org.get("city") or "",
+        "short_description": (org.get("short_description") or "")[:600],
+        "keywords": keywords,
+    }
+    # Drop empties so the Stage 1 payload stays tight and unknowns read as unknown.
+    return {k: v for k, v in summary.items() if v not in ("", None, [])}
+
+
+def _call_apollo_enrich(domain: str, company_name: str, api_key: str, timeout: int) -> dict[str, Any]:
+    """Single best-effort Apollo enrich call. Tries domain first, then name."""
+    headers = {
+        "X-Api-Key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    attempts: list[dict[str, str]] = []
+    if domain:
+        attempts.append({"domain": domain})
+    if company_name:
+        attempts.append({"name": company_name})
+    for params in attempts:
+        req = Request(
+            APOLLO_ENRICH_URL,
+            headers=headers,
+            data=json.dumps(params).encode("utf-8"),
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            org = payload.get("organization") or {}
+            if org:
+                return org
+        except (HTTPError, URLError, TimeoutError, ValueError):
+            continue
+    return {}
+
+
+def fetch_apollo_company(
+    domain: str,
+    company_name: str,
+    api_key: str,
+    timeout: int = DEFAULT_APOLLO_TIMEOUT,
+) -> dict[str, Any]:
+    """Return a compact Apollo firmographic summary for a company.
+
+    Returns {} when no API key, no usable inputs, or the lookup misses. Results
+    (including empty ones) are cached per process keyed by domain or company name,
+    mirroring the repo's "cache even empty" behavior to avoid repeat API calls.
+    """
+    if not api_key:
+        return {}
+    domain = (domain or "").strip()
+    company_name = (company_name or "").strip()
+    if not domain and not company_name:
+        return {}
+    cache_key = domain.lower() or company_name.lower()
+    with _apollo_cache_lock:
+        if cache_key in _apollo_cache:
+            return _apollo_cache[cache_key]
+    summary = _summarize_apollo_org(_call_apollo_enrich(domain, company_name, api_key, timeout))
+    with _apollo_cache_lock:
+        _apollo_cache[cache_key] = summary
+    return summary
+
+
+def enrich_lead(
+    lead: LeadInput,
+    raw_row: dict[str, str],
+    allow_web: bool,
+    *,
+    apollo_enabled: bool = False,
+    apollo_api_key: str = "",
+    apollo_timeout: int = DEFAULT_APOLLO_TIMEOUT,
+) -> EnrichedLead:
     website_title = ""
     website_summary = ""
     if allow_web and lead.company_domain:
         website_title, website_summary = fetch_website_summary(lead.company_domain)
+    apollo_company: dict[str, Any] = {}
+    if apollo_enabled:
+        apollo_company = fetch_apollo_company(
+            lead.company_domain, lead.company_name, apollo_api_key, apollo_timeout
+        )
     return EnrichedLead(
         lead=asdict(lead),
         company_domain=lead.company_domain,
@@ -452,6 +565,7 @@ def enrich_lead(lead: LeadInput, raw_row: dict[str, str], allow_web: bool) -> En
         interaction_label=(raw_row.get("INTERACTION") or "").strip().lower(),
         website_summary=website_summary,
         website_title=website_title,
+        apollo_company=apollo_company,
         csv_context={
             "industry": (raw_row.get("INDUSTRY") or "").strip(),
             "company_size": (raw_row.get("COMPANY SIZE") or "").strip(),
@@ -758,6 +872,8 @@ def _result_fields() -> list[str]:
         "company_name",
         "company_domain",
         "company_size",
+        "apollo_industry",
+        "apollo_employees",
         "linkedin_url",
         "decision",
         "score",
@@ -793,6 +909,8 @@ def build_export_row(row: dict[str, Any]) -> dict[str, Any]:
         "company_name": row["lead"]["company_name"],
         "company_domain": row["lead"]["company_domain"],
         "company_size": row["lead"]["company_size"] or "",
+        "apollo_industry": row.get("enrichment", {}).get("apollo_company", {}).get("industry", ""),
+        "apollo_employees": row.get("enrichment", {}).get("apollo_company", {}).get("estimated_num_employees", "") or "",
         "linkedin_url": row["lead"]["linkedin_url"] or "",
         "decision": row["routing"],
         "score": row["decision"]["score"],
@@ -866,7 +984,7 @@ def load_manifest(output_dir: Path) -> Optional[dict[str, Any]]:
     return read_json(path)
 
 
-def make_config_snapshot(args: argparse.Namespace, input_path: Path, api_base: str, campaign: Campaign) -> dict[str, Any]:
+def make_config_snapshot(args: argparse.Namespace, input_path: Path, api_base: str, campaign: Campaign, apollo_enabled: bool = False) -> dict[str, Any]:
     return {
         "manifest_version": MANIFEST_VERSION,
         "input_path": str(input_path),
@@ -876,6 +994,7 @@ def make_config_snapshot(args: argparse.Namespace, input_path: Path, api_base: s
         "model": args.model,
         "api_base": api_base,
         "disable_web_enrichment": bool(args.disable_web_enrichment),
+        "apollo_enabled": bool(apollo_enabled),
         "limit": int(args.limit or 0),
         "sleep_ms": int(args.sleep_ms or 0),
         "timeout_seconds": int(args.timeout_seconds),
@@ -1049,9 +1168,19 @@ def score_one_lead(
     timeout_seconds: int,
     max_retries: int,
     allow_web: bool,
+    apollo_enabled: bool,
+    apollo_api_key: str,
+    apollo_timeout: int,
     rate_limiter: Optional[RequestRateLimiter],
 ) -> dict[str, Any]:
-    enriched = enrich_lead(lead, raw_row, allow_web=allow_web)
+    enriched = enrich_lead(
+        lead,
+        raw_row,
+        allow_web=allow_web,
+        apollo_enabled=apollo_enabled,
+        apollo_api_key=apollo_api_key,
+        apollo_timeout=apollo_timeout,
+    )
     stage1_payload = {"lead": asdict(lead), "enrichment": asdict(enriched)}
     raw_stage1 = chat_completion(
         build_messages(campaign.stage1_system_prompt, stage1_payload),
@@ -1106,6 +1235,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=int, default=int(os.environ.get("LLM_TIMEOUT_SECONDS", "120")), help="Per-request LLM timeout")
     parser.add_argument("--max-retries", type=int, default=int(os.environ.get("LLM_MAX_RETRIES", "3")), help="Retries for transient LLM failures")
     parser.add_argument("--disable-web-enrichment", action="store_true", help="Skip best-effort website fetch")
+    parser.add_argument("--enable-apollo", action="store_true", help="Enable Apollo.io firmographic enrichment (also via APOLLO_ENABLED=true)")
+    parser.add_argument("--apollo-api-key", default=os.environ.get("APOLLO_API_KEY", ""), help="Apollo.io API key; defaults to APOLLO_API_KEY")
+    parser.add_argument("--apollo-timeout", type=int, default=int(os.environ.get("APOLLO_TIMEOUT_SECONDS", str(DEFAULT_APOLLO_TIMEOUT))), help="Per-request Apollo timeout in seconds")
     parser.add_argument("--api-base", default=os.environ.get("LLM_API_BASE", ""), help="Provider API base URL; optional when using defaults")
     parser.add_argument("--model", default=os.environ.get("LLM_MODEL", ""), help="LLM model name")
     parser.add_argument("--api-key", default=os.environ.get("LLM_API_KEY", ""), help="LLM API key")
@@ -1149,11 +1281,20 @@ def main(argv: list[str]) -> int:
         print(f"Input CSV not found: {input_path}", file=sys.stderr)
         return 2
     api_base = (args.api_base or "").strip() or _default_api_base(provider)
+
+    apollo_enabled = bool(args.enable_apollo) or os.environ.get("APOLLO_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+    apollo_api_key = (args.apollo_api_key or "").strip()
+    if apollo_enabled and not apollo_api_key:
+        print("Apollo enrichment requested but APOLLO_API_KEY/--apollo-api-key is empty — continuing without Apollo", file=sys.stderr)
+        apollo_enabled = False
+    if apollo_enabled:
+        print(f"Apollo.io firmographic enrichment: enabled (timeout {args.apollo_timeout}s)")
+
     campaign = load_campaign(args.campaign)
     lead_rows = load_csv(input_path)
     if args.limit and args.limit > 0:
         lead_rows = lead_rows[: args.limit]
-    config_snapshot = make_config_snapshot(args, input_path, api_base, campaign)
+    config_snapshot = make_config_snapshot(args, input_path, api_base, campaign, apollo_enabled)
     manifest = init_or_resume_manifest(output_dir, config_snapshot, lead_rows)
     rate_limiter = RequestRateLimiter(args.requests_per_minute)
 
@@ -1186,6 +1327,9 @@ def main(argv: list[str]) -> int:
                 timeout_seconds=args.timeout_seconds,
                 max_retries=args.max_retries,
                 allow_web=not args.disable_web_enrichment,
+                apollo_enabled=apollo_enabled,
+                apollo_api_key=apollo_api_key,
+                apollo_timeout=args.apollo_timeout,
                 rate_limiter=rate_limiter,
             ): (index, lead)
             for index, lead, raw_row in pending_items

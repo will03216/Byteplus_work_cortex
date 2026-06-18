@@ -15,7 +15,9 @@ output/runs/
 *.log
 
 # Skill release artifacts
-dist/
+dist/*
+# ...except tagged skill release zips we want versioned
+!dist/lead-gen-cortex-operator-1.1.0-rc1.zip
 
 # Lead Gen Cortex skill generated runtime outputs
 .trae/skills/lead-gen-cortex-operator/benchmark_reports/

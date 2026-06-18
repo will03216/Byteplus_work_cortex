@@ -47,6 +47,21 @@ python3 .trae/skills/lead-gen-cortex-operator/runner/score_csv.py \
   --campaign kling
 ```
 
+## Example 4b. Enable Apollo.io Firmographic Enrichment
+
+```bash
+export APOLLO_API_KEY="your-apollo-key"
+python3 .trae/skills/lead-gen-cortex-operator/runner/score_csv.py \
+  --input "/absolute/path/to/trigify.csv" \
+  --output-dir "/absolute/path/to/skill-output" \
+  --campaign seedance \
+  --enable-apollo
+```
+
+Equivalent via env only: set `APOLLO_ENABLED=true` and `APOLLO_API_KEY=...` and omit
+the flag. Apollo company data is attached to each `_enrichment.json` artifact and the
+Stage 1 payload, and `apollo_industry` / `apollo_employees` appear in the result CSVs.
+
 ## Example 5. Use An OpenAI-Compatible Endpoint
 
 ```bash

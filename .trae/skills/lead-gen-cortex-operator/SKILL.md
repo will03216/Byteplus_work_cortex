@@ -169,6 +169,19 @@ Required environment:
 Optional environment:
 
 - `LLM_API_BASE`
+- `APOLLO_ENABLED` (`true` to turn on Apollo.io firmographic enrichment)
+- `APOLLO_API_KEY` (required when Apollo is enabled)
+- `APOLLO_TIMEOUT_SECONDS` (per-request Apollo timeout, default 10)
+
+To enable Apollo enrichment, either set `APOLLO_ENABLED=true` with `APOLLO_API_KEY`, or pass `--enable-apollo --apollo-api-key ...`:
+
+```bash
+python3 .trae/skills/lead-gen-cortex-operator/runner/score_csv.py \
+  --input "/absolute/path/to/leads.csv" \
+  --output-dir "/absolute/path/to/output" \
+  --campaign seedance \
+  --enable-apollo --apollo-api-key "$APOLLO_API_KEY"
+```
 
 ### 4. Direct Skill Execution Rules
 
@@ -196,7 +209,12 @@ Gather only best-effort enrichment:
 - role seniority from title
 - company website summary
 - LinkedIn public profile summary
-- optional Apollo/company metadata if available
+- Apollo.io firmographics when enabled — the runner calls the Apollo organization
+  enrich API (domain first, company name fallback) and attaches a compact summary
+  (`industry`, `estimated_num_employees`, `annual_revenue_printed`, `founded_year`,
+  `country`/`city`, `keywords`, `short_description`) to the enrichment artifact and
+  Stage 1 payload. Results are cached per run so repeated companies hit the API once.
+  Missing data stays absent rather than fabricated, so Stage 1 treats it as unknown.
 - optional prior memory if the user explicitly wants history-aware context
 
 #### Step C. Stage 1 LLM Call
