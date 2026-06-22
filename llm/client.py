@@ -30,6 +30,7 @@ class LiteLLMClient:
     provider: Optional[str] = None
     api_base: Optional[str] = None
     timeout_seconds: int = 30
+    thinking_budget: Optional[int] = None  # set >0 to enable extended thinking
 
     async def generate(
         self,
@@ -54,6 +55,11 @@ class LiteLLMClient:
             request_kwargs["custom_llm_provider"] = self.provider
         if self.api_base:
             request_kwargs["api_base"] = self.api_base
+        if self.thinking_budget and self.thinking_budget > 0:
+            request_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self.thinking_budget,
+            }
 
         try:
             response = await acompletion(**request_kwargs)

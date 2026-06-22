@@ -240,11 +240,12 @@ async def run_batch(
     stats = RunStats()
     sem   = asyncio.Semaphore(concurrency)
     client = LiteLLMClient(
-        model           = config.LLM_MODEL,
-        api_key         = config.LLM_API_KEY,
-        provider        = config.LLM_PROVIDER,
-        api_base        = config.LLM_API_BASE,
-        timeout_seconds = config.LLM_TIMEOUT_SECONDS,
+        model            = config.LLM_MODEL,
+        api_key          = config.LLM_API_KEY,
+        provider         = config.LLM_PROVIDER,
+        api_base         = config.LLM_API_BASE,
+        timeout_seconds  = config.LLM_TIMEOUT_SECONDS,
+        thinking_budget  = config.LLM_THINKING_BUDGET,
     )
 
     tasks = [

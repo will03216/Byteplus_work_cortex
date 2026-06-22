@@ -252,6 +252,8 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_website TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS signal_type TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_url TEXT")
+        # Known email on person profiles — persists manual entries across runs
+        await conn.execute("ALTER TABLE person_profiles ADD COLUMN IF NOT EXISTS known_email TEXT")
         # Email columns
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent BOOLEAN DEFAULT FALSE")
@@ -607,6 +609,7 @@ def _row_to_person_profile(row: asyncpg.Record) -> dict:
         "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
         "times_seen": row["times_seen"] or 0,
         "last_run_id": row["last_run_id"],
+        "known_email": row["known_email"] if "known_email" in row.keys() else None,
     }
 
 
@@ -705,15 +708,15 @@ async def set_lead_manual_email_status(
     )
 
 
-async def get_leads_for_email(pool: asyncpg.Pool, run_id: str, max_score: int) -> list:
+async def get_leads_for_email(pool: asyncpg.Pool, run_id: str, min_score: int) -> list:
     rows = await pool.fetch(
         """SELECT * FROM leads
              WHERE run_id=$1
                AND decision IN ('qualified','review')
-               AND score <= $2
+               AND score >= $2
                AND email_sent = FALSE
              ORDER BY score DESC""",
-        run_id, max_score,
+        run_id, min_score,
     )
     return [_row_to_lead(r) for r in rows]
 
@@ -886,6 +889,7 @@ async def upsert_person_profile(
     campaign_id: Optional[str] = None,
     fit_summary: Optional[dict] = None,
     run_id: Optional[str] = None,
+    known_email: Optional[str] = None,
 ) -> dict:
     normalized = normalize_person_key(person_name, linkedin_url)
     if not normalized["person_name"] and not normalized["linkedin_url"]:
@@ -904,6 +908,8 @@ async def upsert_person_profile(
 
     latest_title = title or ((current["latest_title"] if current else None) or "")
     latest_summary = summary or ((current["latest_summary"] if current else None) or "")
+    # Only update known_email if a non-empty value is explicitly passed
+    resolved_email = known_email if known_email else (current["known_email"] if current else None)
 
     if current:
         row = await pool.fetchrow(
@@ -918,7 +924,8 @@ async def upsert_person_profile(
                    latest_fit_by_campaign = $8,
                    last_seen_at = now(),
                    times_seen = times_seen + 1,
-                   last_run_id = COALESCE($9, last_run_id)
+                   last_run_id = COALESCE($9, last_run_id),
+                   known_email = COALESCE($10, known_email)
              WHERE id = $1
          RETURNING *
             """,
@@ -931,6 +938,7 @@ async def upsert_person_profile(
             latest_summary,
             latest_fit_by_campaign,
             run_id,
+            resolved_email,
         )
     else:
         row = await pool.fetchrow(
@@ -938,8 +946,8 @@ async def upsert_person_profile(
             INSERT INTO person_profiles (
                 person_name, normalized_person_name, linkedin_url,
                 company_profile_id, latest_title, latest_summary,
-                latest_fit_by_campaign, last_run_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                latest_fit_by_campaign, last_run_id, known_email
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING *
             """,
             normalized["person_name"] or normalized["linkedin_url"] or "unknown",
@@ -950,6 +958,7 @@ async def upsert_person_profile(
             latest_summary,
             latest_fit_by_campaign,
             run_id,
+            resolved_email,
         )
     return _row_to_person_profile(row)
 

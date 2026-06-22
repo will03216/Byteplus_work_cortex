@@ -350,6 +350,13 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .manual-email-badge { font-size:9px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:1px 5px; border-radius:3px; font-weight:600; white-space:nowrap; line-height:1.4; }
 .manual-email-badge.sent     { background:rgba(74,222,128,0.12); color:var(--green); border:1px solid rgba(74,222,128,0.25); }
 .manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
+.email-edit-row { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:10px 12px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; }
+.email-edit-label { font-size:11px; color:var(--text3); white-space:nowrap; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.email-edit-input { flex:1; background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:5px 9px; color:var(--text1); font-size:13px; min-width:0; }
+.email-edit-input:focus { outline:none; border-color:var(--blue); }
+.email-edit-btn { padding:5px 13px; background:var(--blue); color:#fff; border:none; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap; font-weight:500; }
+.email-edit-btn:hover { opacity:0.85; }
+.email-edit-btn.saving { opacity:0.5; pointer-events:none; }
 
 /* ── Email Templates ── */
 .tmpl-list { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; max-height:none; overflow-y:visible; }
@@ -1162,8 +1169,9 @@ function getRunIdFromUrl() {
 // ── Client-side routing ───────────────────────────────────────────────────────
 
 function pushRoute(path) {
-  if (location.pathname !== '/' + path) {
-    history.pushState({ path }, '', '/' + path);
+  const target = '/' + path;
+  if (location.pathname !== target || location.search) {
+    history.pushState({ path }, '', target);
   }
 }
 
@@ -1171,8 +1179,14 @@ async function readRoute() {
   const path = location.pathname.replace(/^\//, '');
   const [section, ...rest] = path.split('/');
   const param = rest.join('/');
+  // Capture run_id before any pushState call strips query params
+  const queryRunId = new URLSearchParams(location.search).get('run_id');
   if (section === 'campaign' && param) {
-    if (campaigns.find(c => c.id === param)) { openCampaignView(param); return; }
+    if (campaigns.find(c => c.id === param)) {
+      openCampaignView(param);
+      if (queryRunId && allRuns.find(r => r.run_id === queryRunId)) { await loadRun(queryRunId); }
+      return;
+    }
   } else if (section === 'run' && param) {
     if (allRuns.find(r => r.run_id === param)) { await loadRun(param); return; }
   } else if (section === 'settings') {
@@ -1181,8 +1195,7 @@ async function readRoute() {
     await openSkills(param || null); return;
   } else {
     // Legacy support: ?run_id= query param
-    const legacyRun = new URLSearchParams(location.search).get('run_id');
-    if (legacyRun && allRuns.find(r => r.run_id === legacyRun)) { await loadRun(legacyRun); return; }
+    if (queryRunId && allRuns.find(r => r.run_id === queryRunId)) { await loadRun(queryRunId); return; }
   }
   openHome();
 }
@@ -1502,6 +1515,7 @@ function renderRow(l, i) {
     ...(l.unknowns||[]).map(e=>`<div class="ev-item unknown">${e}</div>`),
     ...(l.hard_disqualifiers||[]).map(e=>`<div class="ev-item hard-dis">${e}</div>`),
   ].join('');
+  const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
   const preview = emailPreviews[l.lead_id];
   const emailHtml = preview ? (() => {
     const manualTag = preview.is_manual
@@ -1509,7 +1523,6 @@ function renderRow(l, i) {
       : preview.email_sent
         ? `<span class="email-sent-badge">✓ Sent to Instantly</span>`
         : '';
-    const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
     const emailAddr = (l.email || '').trim();
     const emailStatusLabel = l.email_status ? ` <span style="font-size:10px;opacity:0.6;">(${l.email_status})</span>` : '';
     const emailRow = emailAddr
@@ -1571,12 +1584,50 @@ function renderRow(l, i) {
             <div class="ev-section">${sigBadge}${evHtml}</div>
           </div>
         </div>
+        <div class="email-edit-row">
+          <span class="email-edit-label">${l.email ? 'Email:' : 'No email —'}</span>
+          <input class="email-edit-input" id="mei-${l.lead_id}" type="email"
+                 placeholder="Enter email manually…" value="${l.email || ''}">
+          <button class="email-edit-btn" id="meb-${l.lead_id}"
+                  onclick="saveManualEmail(${lid})">
+            ${l.email ? 'Update' : 'Save'}
+          </button>
+        </div>
         ${emailHtml}
       </div>
     </div>`;
 }
 
 function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
+
+async function saveManualEmail(leadId) {
+  const input = document.getElementById('mei-' + leadId);
+  const btn   = document.getElementById('meb-' + leadId);
+  const email = (input.value || '').trim();
+  if (!email || !email.includes('@') || !email.split('@')[1]?.includes('.')) {
+    input.style.borderColor = 'var(--red)';
+    setTimeout(() => { input.style.borderColor = ''; }, 1500);
+    return;
+  }
+  btn.classList.add('saving');
+  btn.textContent = 'Saving…';
+  const resp = await fetch(
+    `/api/runs/${currentRunId}/leads/${encodeURIComponent(leadId)}/email`,
+    { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email}) }
+  );
+  if (!resp.ok) {
+    btn.classList.remove('saving');
+    btn.textContent = 'Error';
+    setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+    return;
+  }
+  const lead = allLeads.find(l => l.lead_id === leadId);
+  if (lead) lead.email = email;
+  btn.textContent = '✓ Saved';
+  setTimeout(async () => {
+    await loadRun(currentRunId);
+  }, 600);
+}
 
 let _emailConfirmLeadId = null;
 
@@ -1683,14 +1734,14 @@ async function openSendModal() {
   if (!eligible.length) {
     document.getElementById('send-modal-body').textContent =
       manual.length
-        ? `All ${manual.length} eligible leads are high-value (score > threshold) — send these manually.`
+        ? `${manual.length} lead${manual.length > 1 ? 's' : ''} score below threshold — no leads ready to send.`
         : 'No eligible leads to send.';
     return;
   }
 
   document.getElementById('send-modal-body').innerHTML =
     `<strong>${eligible.length} lead${eligible.length > 1 ? 's' : ''}</strong> will be added to your Instantly campaign.` +
-    (manual.length ? `<br><br><span style="color:var(--blue)">★ ${manual.length} high-value lead${manual.length > 1 ? 's' : ''} (score &gt; threshold) excluded — send these manually.</span>` : '');
+    (manual.length ? `<br><br><span style="color:var(--text3)">★ ${manual.length} lead${manual.length > 1 ? 's' : ''} below score threshold — not sent.</span>` : '');
   document.getElementById('send-modal-confirm').disabled = false;
 }
 
@@ -2373,7 +2424,7 @@ async function loadPastRuns() {
 async function loadRun(runId) {
   closeUploadModal();
   currentRunId = runId;
-  setRunIdInUrl(runId);
+  pushRoute('run/' + runId);
   if (!allRuns.find(r => r.run_id === runId)) await loadPastRuns();
   const runMeta = getRunMeta(runId);
   if (runMeta && runMeta.campaign_id) currentCampaignId = runMeta.campaign_id;
@@ -2389,7 +2440,6 @@ async function loadRun(runId) {
   populateResults(leads, runId);
   renderHome();
   show('s-results');
-  pushRoute('run/' + runId);
 }
 
 function populateResults(leads, runId) {

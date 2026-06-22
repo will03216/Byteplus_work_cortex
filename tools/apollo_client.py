@@ -108,7 +108,9 @@ async def _cache_set(key: str, data: dict) -> None:
 # ── API call ──────────────────────────────────────────────────────────────────
 
 def _ssl_verify() -> bool:
-    return os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+    # APOLLO_SSL_VERIFY takes precedence; falls back to LLM_SSL_VERIFY
+    val = os.getenv("APOLLO_SSL_VERIFY") or os.getenv("LLM_SSL_VERIFY", "true")
+    return val.lower() not in ("false", "0", "no")
 
 
 async def _call_apollo(api_key: str, timeout: int, **params) -> dict:

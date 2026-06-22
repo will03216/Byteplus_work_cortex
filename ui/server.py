@@ -23,6 +23,9 @@ from typing import Optional
 
 import secrets
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import httpx
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -142,6 +145,8 @@ async def lifespan(app: FastAPI):
             _pool = None
     else:
         logger.warning("DATABASE_URL not set — results will not persist across restarts")
+        # In no-DB mode, read apollo_enabled directly from env (loaded from .env above)
+        _settings["apollo_enabled"] = os.getenv("APOLLO_ENABLED", "false").lower() in ("true", "1", "yes")
 
     yield
 
@@ -548,35 +553,162 @@ def _build_email(lead: dict) -> dict:
     return {"subject": subject, "body": body, "vertical": vertical}
 
 
-async def _send_to_instantly(leads: list) -> dict:
+def _is_unresolvable_email(email: str) -> bool:
+    """Pre-filter domains known to produce esp_code=999 in Instantly."""
+    domain = email.split("@")[-1].lower() if "@" in email else ""
+    # Corporate domains that Instantly can't resolve or that block external mail
+    _BLOCKED = {"bytedance.com", "byteplus.com", "tiktok.com"}
+    return domain in _BLOCKED
+
+
+def _instantly_log(entry: dict) -> None:
+    """Append a timestamped JSON entry to the Instantly debug log."""
+    import datetime
+    log_dir = OUTPUT_DIR / "instantly_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "instantly_debug.jsonl"
+    entry["ts"] = datetime.datetime.utcnow().isoformat()
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+async def _instantly_call(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> httpx.Response:
+    """Make an Instantly API call and log the full request/response."""
+    resp = await client.request(method, url, **kwargs)
+    _instantly_log({
+        "method": method,
+        "url": url,
+        "request_body": kwargs.get("json"),
+        "status": resp.status_code,
+        "response": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500],
+    })
+    return resp
+
+
+async def _send_to_instantly(leads: list) -> list:
+    """Add leads to Instantly and ensure campaign is active. Returns list of sent lead_ids."""
     ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
-    results = []
+    sent_ids = []
+    instantly_id_map: dict[str, str] = {}
+
     async with httpx.AsyncClient(
         timeout=30,
         verify=ssl_verify,
         headers={"Authorization": f"Bearer {INSTANTLY_API_KEY}"},
     ) as client:
+
+        # Step 1: Check campaign state before adding leads
+        try:
+            r = await _instantly_call(client, "GET",
+                f"https://api.instantly.ai/api/v2/campaigns/{INSTANTLY_CAMPAIGN_ID}")
+            pre_status = r.json().get("status")
+            pre_nss = r.json().get("not_sending_status")
+            logger.info("Instantly campaign pre-send: status=%s not_sending_status=%s",
+                        pre_status, pre_nss)
+        except Exception as exc:
+            logger.warning("Could not fetch campaign state: %s", exc)
+            pre_status = None
+
+        # Step 2: Add eligible leads
         for lead in leads:
+            email = (lead.get("email") or "").strip()
+            if not email:
+                logger.warning("Skipping lead %s — no email address", lead.get("lead_id"))
+                continue
+            if _is_unresolvable_email(email):
+                logger.warning("Skipping %s — domain blocked (esp_code=999 domain)", email)
+                continue
             name = (lead.get("name") or "").strip()
             parts = name.split(None, 1)
             payload = {
-                "email":           lead.get("email") or PLACEHOLDER_EMAIL,
+                "email":           email,
                 "first_name":      parts[0] if parts else "",
                 "last_name":       parts[1] if len(parts) > 1 else "",
                 "company_name":    lead.get("company") or "",
                 "website":         lead.get("company_website") or "",
                 "personalization": _build_email(lead)["body"],
-                "campaign_id":     INSTANTLY_CAMPAIGN_ID,
+                "campaign":        INSTANTLY_CAMPAIGN_ID,
             }
-            resp = await client.post("https://api.instantly.ai/api/v2/leads", json=payload)
+            resp = await _instantly_call(client, "POST",
+                "https://api.instantly.ai/api/v2/leads", json=payload)
             if not resp.is_success:
-                logger.error(
-                    "Instantly API error %d for %s: %s",
-                    resp.status_code, payload["email"], resp.text,
-                )
+                logger.error("Instantly API error %d for %s: %s",
+                             resp.status_code, email, resp.text)
                 resp.raise_for_status()
-            results.append(resp.json())
-    return {"leads_sent": len(results)}
+            data = resp.json()
+            instantly_lead_id = data.get("id", "")
+            if data.get("esp_code") == 999:
+                if instantly_lead_id:
+                    try:
+                        await _instantly_call(client, "DELETE",
+                            f"https://api.instantly.ai/api/v2/leads/{instantly_lead_id}")
+                    except Exception:
+                        pass
+                logger.warning("Skipping %s — esp_code=999 on response", email)
+                continue
+            sent_ids.append(lead["lead_id"])
+            if instantly_lead_id:
+                instantly_id_map[instantly_lead_id] = lead["lead_id"]
+            logger.info("Sent to Instantly: %s <%s> (esp=%s)", lead.get("name"), email, data.get("esp_code"))
+
+        if not sent_ids:
+            return sent_ids
+
+        # Step 3: Activate if not already active (draft=0, paused=2, completed=3)
+        try:
+            r = await _instantly_call(client, "GET",
+                f"https://api.instantly.ai/api/v2/campaigns/{INSTANTLY_CAMPAIGN_ID}")
+            status = r.json().get("status")
+            if status == 1:
+                logger.info("Campaign already active — %d lead(s) queued", len(sent_ids))
+            else:
+                logger.info("Campaign status=%s — activating with %d lead(s)", status, len(sent_ids))
+                act = await _instantly_call(client, "POST",
+                    f"https://api.instantly.ai/api/v2/campaigns/{INSTANTLY_CAMPAIGN_ID}/activate")
+                logger.info("Activate response: status=%s not_sending_status=%s",
+                            act.json().get("status"), act.json().get("not_sending_status"))
+        except Exception as exc:
+            logger.warning("Could not manage Instantly campaign status: %s", exc)
+
+        # Step 4: Wait 5s for async ESP resolution, purge any 999s
+        await asyncio.sleep(5)
+        try:
+            r = await _instantly_call(client, "POST",
+                "https://api.instantly.ai/api/v2/leads/list",
+                json={"campaign_id": INSTANTLY_CAMPAIGN_ID, "limit": 50})
+            for il in r.json().get("items", []):
+                if il.get("esp_code") == 999 and il["id"] in instantly_id_map:
+                    our_lead_id = instantly_id_map[il["id"]]
+                    await _instantly_call(client, "DELETE",
+                        f"https://api.instantly.ai/api/v2/leads/{il['id']}")
+                    sent_ids = [lid for lid in sent_ids if lid != our_lead_id]
+                    logger.warning("Removed async esp_code=999 lead: %s", il.get("email"))
+        except Exception as exc:
+            logger.warning("Post-send esp cleanup failed: %s", exc)
+
+    return sent_ids
+
+
+# ── API: Instantly debug log ─────────────────────────────────────────────────
+
+@app.get("/api/instantly/debug-log")
+async def api_instantly_debug_log(request: Request, lines: int = 50):
+    _require_auth(request)
+    log_file = OUTPUT_DIR / "instantly_logs" / "instantly_debug.jsonl"
+    if not log_file.exists():
+        return JSONResponse({"entries": [], "message": "No log yet — trigger a Send to Instantly first"})
+    entries = []
+    with open(log_file, encoding="utf-8") as f:
+        all_lines = f.readlines()
+    for line in all_lines[-lines:]:
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            pass
+    return JSONResponse({"entries": entries, "total_lines": len(all_lines)})
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -755,7 +887,17 @@ async def _import_to_db(run_id: str, run_dir: Path, returncode: int, campaign_id
             campaign_id=campaign_id,
             fit_summary=fit_summary,
             run_id=run_id,
+            known_email=lead.get("email") or None,
         )
+        # Back-fill email from person profile if Apollo didn't find one
+        if not lead.get("email") and person_profile and person_profile.get("known_email"):
+            await _pool.execute(
+                "UPDATE leads SET email=$1 WHERE run_id=$2 AND lead_id=$3",
+                person_profile["known_email"], run_id, lead.get("lead_id", ""),
+            )
+            lead["email"] = person_profile["known_email"]
+            logger.info("Back-filled email for %s from person profile: %s",
+                        lead.get("name"), person_profile["known_email"])
         await store.insert_lead_memory(
             _pool,
             run_id=run_id,
@@ -994,6 +1136,7 @@ async def api_agent_profile_fit(request: Request):
             provider=config.LLM_PROVIDER,
             api_base=config.LLM_API_BASE,
             timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+            thinking_budget=config.LLM_THINKING_BUDGET,
         ),
         enriched,
         campaign=campaign,
@@ -1005,6 +1148,7 @@ async def api_agent_profile_fit(request: Request):
             provider=config.LLM_PROVIDER,
             api_base=config.LLM_API_BASE,
             timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+            thinking_budget=config.LLM_THINKING_BUDGET,
         ),
         evidence,
         campaign=campaign,
@@ -1441,7 +1585,7 @@ async def email_preview(request: Request, run_id: str):
             "company":    l["company"],
             "score":      l["score"],
             "decision":   l["decision"],
-            "is_manual":  l["score"] > INSTANTLY_SCORE_THRESHOLD,
+            "is_manual":  l["score"] < INSTANTLY_SCORE_THRESHOLD,
             "email_sent": l.get("email_sent", False),
         }
         for l in leads
@@ -1488,26 +1632,28 @@ async def send_emails(request: Request, run_id: str):
 
     eligible = await store.get_leads_for_email(_pool, run_id, INSTANTLY_SCORE_THRESHOLD)
     eligible = [l for l in eligible if not _is_excluded(l)]
+    # Only send leads that have a real email address
+    eligible = [l for l in eligible if (l.get("email") or "").strip()]
     if not eligible:
-        return JSONResponse({"sent": 0, "message": "No eligible leads to send"})
+        return JSONResponse({"sent": 0, "message": "No eligible leads with email addresses to send"})
 
     try:
-        await _send_to_instantly(eligible)
+        sent_ids = await _send_to_instantly(eligible)
     except Exception as exc:
         return JSONResponse({"error": f"Instantly API error: {exc}"}, status_code=502)
 
-    lead_ids = [l["lead_id"] for l in eligible]
-    await store.mark_leads_email_sent(_pool, run_id, lead_ids)
+    if sent_ids:
+        await store.mark_leads_email_sent(_pool, run_id, sent_ids)
 
     all_leads = await store.get_leads(_pool, run_id)
     unsent = [l for l in all_leads
               if not l.get("email_sent")
               and l["decision"] in ("qualified", "review")
-              and l["score"] <= INSTANTLY_SCORE_THRESHOLD]
+              and l["score"] >= INSTANTLY_SCORE_THRESHOLD]
     status = "partial" if unsent else "sent"
     await store.update_run_email_status(_pool, run_id, status)
 
-    return JSONResponse({"sent": len(eligible), "email_status": status})
+    return JSONResponse({"sent": len(sent_ids), "email_status": status})
 
 
 # ── API: settings ─────────────────────────────────────────────────────────────
@@ -1609,6 +1755,38 @@ async def api_import_exclusions(request: Request, file: UploadFile = File(...)):
             await store.add_exclusion(_pool, url)
         _exclusions[:] = await store.get_exclusions(_pool)
     return JSONResponse({"ok": True, "imported": len(urls)})
+
+
+# ── API: per-lead manual email address ────────────────────────────────────────
+
+@app.patch("/api/runs/{run_id}/leads/{lead_id}/email")
+async def api_set_lead_email(request: Request, run_id: str, lead_id: str):
+    _require_auth(request)
+    data = await request.json()
+    email = (data.get("email") or "").strip()
+    if not email or "@" not in email or "." not in email.split("@")[-1]:
+        return JSONResponse({"error": "Valid email required"}, status_code=400)
+    if _pool:
+        await _pool.execute(
+            "UPDATE leads SET email=$1 WHERE run_id=$2 AND lead_id=$3",
+            email, run_id, lead_id,
+        )
+        # Persist to person_profiles so the email survives future re-uploads
+        lead_row = await _pool.fetchrow(
+            "SELECT person_name, linkedin_url FROM leads WHERE run_id=$1 AND lead_id=$2",
+            run_id, lead_id,
+        )
+        if lead_row and (lead_row["person_name"] or lead_row["linkedin_url"]):
+            try:
+                await store.upsert_person_profile(
+                    _pool,
+                    lead_row["person_name"] or lead_row["linkedin_url"] or "",
+                    linkedin_url=lead_row["linkedin_url"] or "",
+                    known_email=email,
+                )
+            except Exception as exc:
+                logger.warning("Could not persist known_email to person profile: %s", exc)
+    return JSONResponse({"ok": True, "email": email})
 
 
 # ── API: per-lead manual email status ─────────────────────────────────────────

@@ -29,8 +29,12 @@ LLM_PROVIDER        = os.getenv("LLM_PROVIDER") or None
 LLM_MODEL           = _normalize_model_name(os.getenv("LLM_MODEL") or DEFAULT_LLM_MODEL)
 LLM_API_KEY         = os.getenv("LLM_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
 LLM_API_BASE        = os.getenv("LLM_API_BASE") or None
-LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
-LLM_SSL_VERIFY      = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+LLM_TIMEOUT_SECONDS  = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+LLM_SSL_VERIFY       = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+# Extended thinking: "low"=~4k tokens, "medium"=~10k, "high"=~16k, or set 0 to disable
+_EFFORT_MAP = {"low": 4000, "medium": 10000, "high": 16000}
+_effort_raw = os.getenv("LLM_THINKING_EFFORT", "").lower().strip()
+LLM_THINKING_BUDGET = _EFFORT_MAP.get(_effort_raw, int(_effort_raw) if _effort_raw.isdigit() else 0)
 
 # ── Scoring weights (must sum to 100) ───────────────────────────────────────
 # Calibrated against Antti (Head of SDR) meeting — 2026-04-17
