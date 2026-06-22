@@ -1593,6 +1593,90 @@ async def email_preview(request: Request, run_id: str):
     return JSONResponse(previews)
 
 
+async def _fetch_instantly_by_email() -> dict:
+    """Fetch all leads in the configured campaign from Instantly, keyed by lowercased email.
+    Returns {email: {"sent_at": str|None, "instantly_status": int}}. Empty if not configured."""
+    if not INSTANTLY_API_KEY or not INSTANTLY_CAMPAIGN_ID:
+        return {}
+    ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+    by_email: dict = {}
+    async with httpx.AsyncClient(
+        timeout=30, verify=ssl_verify,
+        headers={"Authorization": f"Bearer {INSTANTLY_API_KEY}"},
+    ) as client:
+        starting_after = None
+        for _ in range(40):  # paginate, cap at 40 pages (2000 leads)
+            body = {"campaign_id": INSTANTLY_CAMPAIGN_ID, "limit": 50}
+            if starting_after:
+                body["starting_after"] = starting_after
+            resp = await client.post(
+                "https://api.instantly.ai/api/v2/leads/list", json=body)
+            if not resp.is_success:
+                break
+            data = resp.json()
+            items = data.get("items", [])
+            for il in items:
+                email = (il.get("email") or "").strip().lower()
+                if not email:
+                    continue
+                last_step = (il.get("status_summary") or {}).get("lastStep") or {}
+                sent_at = last_step.get("timestamp_executed")
+                # Keep the record showing a send if any duplicate has one
+                existing = by_email.get(email)
+                if existing is None or (sent_at and not existing.get("sent_at")):
+                    by_email[email] = {
+                        "sent_at": sent_at,
+                        "instantly_status": il.get("status"),
+                    }
+            starting_after = data.get("next_starting_after")
+            if not starting_after or not items:
+                break
+    return by_email
+
+
+def _lead_delivery_status(lead: dict, by_email: dict) -> dict:
+    """Resolve a lead's Instantly status: pushed?, delivery state, sent_at timestamp."""
+    email = (lead.get("email") or "").strip().lower()
+    info = by_email.get(email) if email else None
+    pushed = bool(info) or bool(lead.get("email_sent"))
+    if info and info.get("sent_at"):
+        return {"pushed": True, "delivery": "sent", "sent_at": info["sent_at"]}
+    if info:
+        return {"pushed": True, "delivery": "queued", "sent_at": None}
+    if pushed:
+        # Marked pushed in our DB but not found in campaign (e.g. esp_code=999 removed)
+        return {"pushed": True, "delivery": "queued", "sent_at": None}
+    return {"pushed": False, "delivery": "not_pushed", "sent_at": None}
+
+
+@app.get("/api/runs/{run_id}/instantly-status")
+async def instantly_status(request: Request, run_id: str):
+    """Return actual Instantly delivery status per lead (sent / queued / not_pushed)."""
+    _require_auth(request)
+    if _pool:
+        leads = await store.get_leads(_pool, run_id)
+    else:
+        leads = _read_run_files(RUNS_DIR / run_id)
+
+    if not INSTANTLY_API_KEY or not INSTANTLY_CAMPAIGN_ID:
+        return JSONResponse({"configured": False, "statuses": {}})
+
+    try:
+        by_email = await _fetch_instantly_by_email()
+    except Exception as exc:
+        logger.warning("Instantly status fetch failed: %s", exc)
+        return JSONResponse({"configured": True, "error": str(exc), "statuses": {}})
+
+    statuses = {
+        l["lead_id"]: {
+            k: v for k, v in _lead_delivery_status(l, by_email).items()
+            if k in ("delivery", "sent_at")
+        }
+        for l in leads
+    }
+    return JSONResponse({"configured": True, "statuses": statuses})
+
+
 @app.get("/api/runs/{run_id}/export")
 async def export_run(request: Request, run_id: str):
     _require_auth(request)
@@ -1604,15 +1688,33 @@ async def export_run(request: Request, run_id: str):
         return JSONResponse({"error": "Run not found"}, status_code=404)
     leads = [l for l in _apply_thresholds(leads) if not _is_excluded(l)]
 
+    # Pull live Instantly status so the export reflects current delivery state
+    by_email: dict = {}
+    try:
+        by_email = await _fetch_instantly_by_email()
+    except Exception as exc:
+        logger.warning("Export: Instantly status fetch failed: %s", exc)
+
     import io
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["name", "company", "company_url", "title", "linkedin_url", "decision", "score", "email_subject", "email_body"])
+    writer.writerow([
+        "name", "company", "company_url", "title", "linkedin_url",
+        "decision", "score", "email", "email_subject", "email_body",
+        "pushed_to_instantly", "email_sent", "email_sent_at",
+    ])
     for l in leads:
         email = _build_email(l)
-        writer.writerow([l["name"], l["company"], l.get("company_website", ""),
-                         l.get("role") or l.get("title", ""), l.get("linkedin_url", ""),
-                         l["decision"], l["score"], email["subject"], email["body"]])
+        status = _lead_delivery_status(l, by_email)
+        writer.writerow([
+            l["name"], l["company"], l.get("company_website", ""),
+            l.get("role") or l.get("title", ""), l.get("linkedin_url", ""),
+            l["decision"], l["score"], l.get("email", ""),
+            email["subject"], email["body"],
+            "yes" if status["pushed"] else "no",
+            "yes" if status["delivery"] == "sent" else "no",
+            status["sent_at"] or "",
+        ])
 
     filename = f"leads-{run_id[:8]}.csv"
     return StreamingResponse(

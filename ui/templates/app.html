@@ -277,6 +277,9 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .email-body-label { font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
 .manual-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(96,165,250,0.1); color:#60a5fa; margin-bottom:8px; }
 .email-sent-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(74,222,128,0.1); color:var(--green); margin-bottom:8px; }
+.email-delivery-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-bottom:8px; margin-left:6px; }
+.email-delivery-badge.sent     { background:rgba(74,222,128,0.16); color:var(--green); }
+.email-delivery-badge.queued   { background:rgba(251,191,36,0.12); color:var(--amber); }
 /* ── Email status on run items ── */
 .email-status-badge { font-size:9px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; padding:1px 5px; border-radius:3px; font-weight:600; }
 .email-status-badge.not_sent { background:rgba(255,255,255,0.05); color:var(--text3); }
@@ -979,6 +982,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
 let allLeads       = [];
 let allRuns        = [];
 let emailPreviews  = {};
+let instantlyStatus = {};   // lead_id -> { delivery: 'sent'|'queued'|'not_pushed', sent_at }
 let appSettings    = { qualified_threshold: 70, disqualified_threshold: 60 };
 let exclusions     = [];
 let emailTemplates = [];
@@ -1518,10 +1522,18 @@ function renderRow(l, i) {
   const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
   const preview = emailPreviews[l.lead_id];
   const emailHtml = preview ? (() => {
+    const delivery = instantlyStatus[l.lead_id];
+    let deliveryTag = '';
+    if (delivery && delivery.delivery === 'sent') {
+      const when = delivery.sent_at ? new Date(delivery.sent_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+      deliveryTag = `<span class="email-delivery-badge sent" title="Email delivered via Instantly">✉ Email sent${when ? ' · ' + when : ''}</span>`;
+    } else if (delivery && delivery.delivery === 'queued') {
+      deliveryTag = `<span class="email-delivery-badge queued" title="In Instantly queue, not yet delivered">⏳ Queued in Instantly</span>`;
+    }
     const manualTag = preview.is_manual
       ? `<span class="manual-badge">★ High value — send manually</span>`
       : preview.email_sent
-        ? `<span class="email-sent-badge">✓ Sent to Instantly</span>`
+        ? `<span class="email-sent-badge">✓ Pushed to Instantly</span>`
         : '';
     const emailAddr = (l.email || '').trim();
     const emailStatusLabel = l.email_status ? ` <span style="font-size:10px;opacity:0.6;">(${l.email_status})</span>` : '';
@@ -1533,7 +1545,7 @@ function renderRow(l, i) {
       : '';
     return `<div class="email-preview">
       <div class="email-preview-title">Email Preview</div>
-      ${manualTag}
+      ${manualTag}${deliveryTag}
       ${emailRow}
       <div class="email-subject">
         <span>Subject: <span>${preview.subject}</span></span>
@@ -2436,10 +2448,23 @@ async function loadRun(runId) {
   ]);
   emailPreviews = {};
   (Array.isArray(previews) ? previews : []).forEach(p => { emailPreviews[p.lead_id] = p; });
+  instantlyStatus = {};
   updateSendButton();
   populateResults(leads, runId);
   renderHome();
   show('s-results');
+  loadInstantlyStatus(runId);
+}
+
+async function loadInstantlyStatus(runId) {
+  try {
+    const res = await fetch('/api/runs/' + runId + '/instantly-status');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.configured || !data.statuses) return;
+    instantlyStatus = data.statuses;
+    if (runId === currentRunId) renderLeads(currentFilter);
+  } catch (e) { /* non-fatal */ }
 }
 
 function populateResults(leads, runId) {
