@@ -6,6 +6,10 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional, List, Dict
 
+# Use LiteLLM's bundled cost map instead of fetching it over HTTPS at import
+# time — avoids SSL cert failures behind corporate proxies / SSL inspection.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 import litellm
 from litellm import acompletion
 

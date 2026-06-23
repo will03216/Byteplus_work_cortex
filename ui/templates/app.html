@@ -1522,19 +1522,27 @@ function renderRow(l, i) {
   const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
   const preview = emailPreviews[l.lead_id];
   const emailHtml = preview ? (() => {
-    const delivery = instantlyStatus[l.lead_id];
+    // Live Instantly status is authoritative; fall back to the DB push flag
+    // until the async status fetch completes.
+    const status = instantlyStatus[l.lead_id];
+    const isPushed = status ? !!status.pushed : !!preview.email_sent;
+    const isSent   = !!(status && status.delivery === 'sent');
+    const isQueued = !!(status && status.delivery === 'queued');
+
+    const pushedTag = isPushed
+      ? `<span class="email-sent-badge" title="Lead handed off to Instantly">✓ Pushed to Instantly</span>`
+      : '';
     let deliveryTag = '';
-    if (delivery && delivery.delivery === 'sent') {
-      const when = delivery.sent_at ? new Date(delivery.sent_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+    if (isSent) {
+      const when = status.sent_at ? new Date(status.sent_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
       deliveryTag = `<span class="email-delivery-badge sent" title="Email delivered via Instantly">✉ Email sent${when ? ' · ' + when : ''}</span>`;
-    } else if (delivery && delivery.delivery === 'queued') {
+    } else if (isQueued) {
       deliveryTag = `<span class="email-delivery-badge queued" title="In Instantly queue, not yet delivered">⏳ Queued in Instantly</span>`;
     }
-    const manualTag = preview.is_manual
+    // Manual badge only when the lead has NOT been pushed (it won't auto-send)
+    const manualTag = (preview.is_manual && !isPushed)
       ? `<span class="manual-badge">★ High value — send manually</span>`
-      : preview.email_sent
-        ? `<span class="email-sent-badge">✓ Pushed to Instantly</span>`
-        : '';
+      : '';
     const emailAddr = (l.email || '').trim();
     const emailStatusLabel = l.email_status ? ` <span style="font-size:10px;opacity:0.6;">(${l.email_status})</span>` : '';
     const emailRow = emailAddr
@@ -1545,7 +1553,7 @@ function renderRow(l, i) {
       : '';
     return `<div class="email-preview">
       <div class="email-preview-title">Email Preview</div>
-      ${manualTag}${deliveryTag}
+      ${manualTag}${pushedTag}${deliveryTag}
       ${emailRow}
       <div class="email-subject">
         <span>Subject: <span>${preview.subject}</span></span>

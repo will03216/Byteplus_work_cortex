@@ -623,13 +623,17 @@ async def _send_to_instantly(leads: list) -> list:
                 continue
             name = (lead.get("name") or "").strip()
             parts = name.split(None, 1)
+            built = _build_email(lead)
             payload = {
                 "email":           email,
                 "first_name":      parts[0] if parts else "",
                 "last_name":       parts[1] if len(parts) > 1 else "",
                 "company_name":    lead.get("company") or "",
                 "website":         lead.get("company_website") or "",
-                "personalization": _build_email(lead)["body"],
+                "personalization": built["body"],
+                # Cortex-rendered per-vertical subject — forwarded as a custom
+                # variable, referenced as {{email_subject}} in the Instantly sequence.
+                "custom_variables": {"email_subject": built["subject"]},
                 "campaign":        INSTANTLY_CAMPAIGN_ID,
             }
             resp = await _instantly_call(client, "POST",
@@ -1635,17 +1639,25 @@ async def _fetch_instantly_by_email() -> dict:
 
 
 def _lead_delivery_status(lead: dict, by_email: dict) -> dict:
-    """Resolve a lead's Instantly status: pushed?, delivery state, sent_at timestamp."""
+    """Resolve a lead's Instantly status: pushed?, delivery state, sent_at timestamp.
+
+    Live Instantly data (`info`, matched by email) is authoritative for delivery.
+    The DB `email_sent` flag only tells us we attempted a push.
+    """
     email = (lead.get("email") or "").strip().lower()
     info = by_email.get(email) if email else None
-    pushed = bool(info) or bool(lead.get("email_sent"))
+    db_pushed = bool(lead.get("email_sent"))
+
     if info and info.get("sent_at"):
+        # Instantly confirms an actual send — most authoritative
         return {"pushed": True, "delivery": "sent", "sent_at": info["sent_at"]}
     if info:
+        # In the campaign but no send recorded yet
         return {"pushed": True, "delivery": "queued", "sent_at": None}
-    if pushed:
-        # Marked pushed in our DB but not found in campaign (e.g. esp_code=999 removed)
-        return {"pushed": True, "delivery": "queued", "sent_at": None}
+    if db_pushed:
+        # We pushed it but it's not currently in the campaign (removed/deduped/esp999).
+        # Delivery cannot be confirmed from Instantly — report pushed, delivery unknown.
+        return {"pushed": True, "delivery": "unknown", "sent_at": None}
     return {"pushed": False, "delivery": "not_pushed", "sent_at": None}
 
 
@@ -1667,13 +1679,7 @@ async def instantly_status(request: Request, run_id: str):
         logger.warning("Instantly status fetch failed: %s", exc)
         return JSONResponse({"configured": True, "error": str(exc), "statuses": {}})
 
-    statuses = {
-        l["lead_id"]: {
-            k: v for k, v in _lead_delivery_status(l, by_email).items()
-            if k in ("delivery", "sent_at")
-        }
-        for l in leads
-    }
+    statuses = {l["lead_id"]: _lead_delivery_status(l, by_email) for l in leads}
     return JSONResponse({"configured": True, "statuses": statuses})
 
 
