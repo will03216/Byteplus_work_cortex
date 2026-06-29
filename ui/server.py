@@ -605,8 +605,13 @@ async def _instantly_call(client: httpx.AsyncClient, method: str, url: str, **kw
     return resp
 
 
-async def _send_to_instantly(leads: list) -> list:
-    """Add leads to Instantly and ensure campaign is active. Returns list of sent lead_ids."""
+async def _send_to_instantly(leads: list, campaign_id: str = "") -> list:
+    """Add leads to one Instantly campaign and ensure it is active.
+    Returns list of sent lead_ids. Falls back to the global default campaign."""
+    campaign_id = (campaign_id or INSTANTLY_CAMPAIGN_ID or "").strip()
+    if not campaign_id:
+        logger.warning("No Instantly campaign id for send batch — skipping")
+        return []
     ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
     sent_ids = []
     instantly_id_map: dict[str, str] = {}
@@ -620,7 +625,7 @@ async def _send_to_instantly(leads: list) -> list:
         # Step 1: Check campaign state before adding leads
         try:
             r = await _instantly_call(client, "GET",
-                f"https://api.instantly.ai/api/v2/campaigns/{INSTANTLY_CAMPAIGN_ID}")
+                f"https://api.instantly.ai/api/v2/campaigns/{campaign_id}")
             pre_status = r.json().get("status")
             pre_nss = r.json().get("not_sending_status")
             logger.info("Instantly campaign pre-send: status=%s not_sending_status=%s",
@@ -651,7 +656,7 @@ async def _send_to_instantly(leads: list) -> list:
                 # Cortex-rendered per-vertical subject — forwarded as a custom
                 # variable, referenced as {{email_subject}} in the Instantly sequence.
                 "custom_variables": {"email_subject": built["subject"]},
-                "campaign":        INSTANTLY_CAMPAIGN_ID,
+                "campaign":        campaign_id,
             }
             resp = await _instantly_call(client, "POST",
                 "https://api.instantly.ai/api/v2/leads", json=payload)
@@ -681,14 +686,14 @@ async def _send_to_instantly(leads: list) -> list:
         # Step 3: Activate if not already active (draft=0, paused=2, completed=3)
         try:
             r = await _instantly_call(client, "GET",
-                f"https://api.instantly.ai/api/v2/campaigns/{INSTANTLY_CAMPAIGN_ID}")
+                f"https://api.instantly.ai/api/v2/campaigns/{campaign_id}")
             status = r.json().get("status")
             if status == 1:
                 logger.info("Campaign already active — %d lead(s) queued", len(sent_ids))
             else:
                 logger.info("Campaign status=%s — activating with %d lead(s)", status, len(sent_ids))
                 act = await _instantly_call(client, "POST",
-                    f"https://api.instantly.ai/api/v2/campaigns/{INSTANTLY_CAMPAIGN_ID}/activate")
+                    f"https://api.instantly.ai/api/v2/campaigns/{campaign_id}/activate")
                 logger.info("Activate response: status=%s not_sending_status=%s",
                             act.json().get("status"), act.json().get("not_sending_status"))
         except Exception as exc:
@@ -699,7 +704,7 @@ async def _send_to_instantly(leads: list) -> list:
         try:
             r = await _instantly_call(client, "POST",
                 "https://api.instantly.ai/api/v2/leads/list",
-                json={"campaign_id": INSTANTLY_CAMPAIGN_ID, "limit": 50})
+                json={"campaign_id": campaign_id, "limit": 50})
             for il in r.json().get("items", []):
                 if il.get("esp_code") == 999 and il["id"] in instantly_id_map:
                     our_lead_id = instantly_id_map[il["id"]]
@@ -1758,7 +1763,7 @@ async def export_run(request: Request, run_id: str):
 @app.post("/api/runs/{run_id}/send-emails")
 async def send_emails(request: Request, run_id: str):
     _require_auth(request)
-    if not INSTANTLY_API_KEY or not INSTANTLY_CAMPAIGN_ID:
+    if not INSTANTLY_API_KEY:
         return JSONResponse({"error": "Instantly not configured"}, status_code=400)
     if not _pool:
         return JSONResponse({"error": "Database required for email sending"}, status_code=400)
@@ -1770,13 +1775,34 @@ async def send_emails(request: Request, run_id: str):
     if not eligible:
         return JSONResponse({"sent": 0, "message": "No eligible leads with email addresses to send"})
 
+    # Group eligible leads by their resolved target Instantly campaign
+    routing_map = await store.get_routing_map(_pool)
+    groups: dict[str, list] = {}
+    no_campaign = 0
+    for l in eligible:
+        cid = _resolve_instantly_campaign(l, routing_map)
+        if not cid:
+            no_campaign += 1
+            continue
+        groups.setdefault(cid, []).append(l)
+
+    if not groups:
+        return JSONResponse({"error": "No Instantly campaign configured for these leads "
+                                      "(set a default INSTANTLY_CAMPAIGN_ID or a routing map)"},
+                            status_code=400)
+
+    all_sent_ids: list = []
+    by_campaign: dict = {}
     try:
-        sent_ids = await _send_to_instantly(eligible)
+        for cid, group in groups.items():
+            sent_ids = await _send_to_instantly(group, cid)
+            all_sent_ids.extend(sent_ids)
+            by_campaign[cid] = len(sent_ids)
     except Exception as exc:
         return JSONResponse({"error": f"Instantly API error: {exc}"}, status_code=502)
 
-    if sent_ids:
-        await store.mark_leads_email_sent(_pool, run_id, sent_ids)
+    if all_sent_ids:
+        await store.mark_leads_email_sent(_pool, run_id, all_sent_ids)
 
     all_leads = await store.get_leads(_pool, run_id)
     unsent = [l for l in all_leads
@@ -1786,7 +1812,8 @@ async def send_emails(request: Request, run_id: str):
     status = "partial" if unsent else "sent"
     await store.update_run_email_status(_pool, run_id, status)
 
-    return JSONResponse({"sent": len(sent_ids), "email_status": status})
+    return JSONResponse({"sent": len(all_sent_ids), "email_status": status,
+                         "by_campaign": by_campaign})
 
 
 # ── API: settings ─────────────────────────────────────────────────────────────
