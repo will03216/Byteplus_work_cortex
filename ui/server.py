@@ -530,11 +530,28 @@ _SEGMENT_TO_VERTICAL = {
 }
 
 
+def _lead_vertical(lead: dict) -> str:
+    """Resolve a lead's vertical key from its segment/industry classification."""
+    industry = (lead.get("industry") or "").strip().lower()
+    return _SEGMENT_TO_VERTICAL.get(industry, "ai_generic")
+
+
+def _resolve_instantly_campaign(lead: dict, routing_map: dict) -> str:
+    """Pick the Instantly campaign for a lead.
+
+    Priority: per-lead override → vertical routing map → global default env var.
+    """
+    override = (lead.get("instantly_campaign_id") or "").strip()
+    if override:
+        return override
+    mapped = routing_map.get(_lead_vertical(lead)) if routing_map else None
+    return mapped or INSTANTLY_CAMPAIGN_ID
+
+
 def _build_email(lead: dict) -> dict:
     first_name = (lead.get("name") or "there").split()[0]
     company    = lead.get("company") or "your company"
-    industry   = (lead.get("industry") or "").strip().lower()
-    vertical   = _SEGMENT_TO_VERTICAL.get(industry, "ai_generic")
+    vertical   = _lead_vertical(lead)
 
     # Find matching template from cache (first match for vertical wins)
     tmpl = next((t for t in _templates if t["vertical"] == vertical), None)
@@ -859,8 +876,16 @@ async def _run_job(run_id: str, csv_path: str, run_dir: Path, concurrency: int, 
 
 async def _import_to_db(run_id: str, run_dir: Path, returncode: int, campaign_id: str = "seedance"):
     leads = _read_run_files(run_dir)
+    routing_map = await store.get_routing_map(_pool)
     for lead in leads:
         await store.upsert_lead(_pool, run_id, lead)
+        # Resolve & persist the Instantly campaign this lead is destined for
+        # (vertical routing map → global default). Overridable later per lead.
+        target_campaign = _resolve_instantly_campaign(lead, routing_map)
+        if target_campaign:
+            await store.set_lead_instantly_campaign(
+                _pool, run_id, lead.get("lead_id", ""), target_campaign)
+            lead["instantly_campaign_id"] = target_campaign
         fit_summary = {
             "decision": lead.get("decision"),
             "score": lead.get("score", 0),

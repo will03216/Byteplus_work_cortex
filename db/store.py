@@ -99,6 +99,21 @@ CREATE TABLE IF NOT EXISTS email_templates (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Saved Instantly outreach campaigns (label + external campaign id)
+CREATE TABLE IF NOT EXISTS instantly_campaigns (
+    id            SERIAL      PRIMARY KEY,
+    label         TEXT        NOT NULL,
+    campaign_id   TEXT        NOT NULL UNIQUE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Vertical → Instantly campaign routing map (global)
+CREATE TABLE IF NOT EXISTS instantly_routing (
+    vertical      TEXT        PRIMARY KEY,
+    campaign_id   TEXT        NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS skill_files (
     id          SERIAL      PRIMARY KEY,
     campaign_id TEXT        NOT NULL,
@@ -259,6 +274,19 @@ async def create_tables(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent BOOLEAN DEFAULT FALSE")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ")
         await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS manual_email_status TEXT")
+        # Multi-campaign routing: which Instantly campaign each lead is destined for
+        await conn.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS instantly_campaign_id TEXT")
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS instantly_campaigns (
+                   id SERIAL PRIMARY KEY, label TEXT NOT NULL,
+                   campaign_id TEXT NOT NULL UNIQUE,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
+        )
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS instantly_routing (
+                   vertical TEXT PRIMARY KEY, campaign_id TEXT NOT NULL,
+                   updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
+        )
         # Email status on runs
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS email_status TEXT DEFAULT 'not_sent'")
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS apollo_enabled BOOLEAN DEFAULT FALSE")
@@ -541,6 +569,8 @@ def _row_to_lead(row: asyncpg.Record) -> dict:
         "email":                row["email"] or "",
         "email_sent":           row["email_sent"] or False,
         "manual_email_status":  row["manual_email_status"] or None,
+        "instantly_campaign_id": (row["instantly_campaign_id"]
+                                  if "instantly_campaign_id" in row.keys() else None),
     }
 
 
@@ -1474,6 +1504,70 @@ async def add_exclusion(pool: asyncpg.Pool, value: str, campaign_id: str = "seed
 
 async def remove_exclusion(pool: asyncpg.Pool, exclusion_id: int) -> None:
     await pool.execute("DELETE FROM exclusions WHERE id=$1", exclusion_id)
+
+
+# ── Instantly campaigns & routing ─────────────────────────────────────────────
+
+async def list_instantly_campaigns(pool: asyncpg.Pool) -> list:
+    rows = await pool.fetch(
+        "SELECT id, label, campaign_id, created_at FROM instantly_campaigns ORDER BY label"
+    )
+    return [
+        {"id": r["id"], "label": r["label"], "campaign_id": r["campaign_id"],
+         "created_at": r["created_at"].isoformat() if r["created_at"] else None}
+        for r in rows
+    ]
+
+
+async def add_instantly_campaign(pool: asyncpg.Pool, label: str, campaign_id: str) -> dict:
+    row = await pool.fetchrow(
+        """INSERT INTO instantly_campaigns(label, campaign_id) VALUES($1, $2)
+           ON CONFLICT (campaign_id) DO UPDATE SET label=$1
+           RETURNING id, label, campaign_id, created_at""",
+        label.strip(), campaign_id.strip(),
+    )
+    return {"id": row["id"], "label": row["label"], "campaign_id": row["campaign_id"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None}
+
+
+async def remove_instantly_campaign(pool: asyncpg.Pool, row_id: int) -> None:
+    await pool.execute("DELETE FROM instantly_campaigns WHERE id=$1", row_id)
+
+
+async def get_routing_map(pool: asyncpg.Pool) -> dict:
+    """Return {vertical: campaign_id} for all configured routing rules."""
+    rows = await pool.fetch("SELECT vertical, campaign_id FROM instantly_routing")
+    return {r["vertical"]: r["campaign_id"] for r in rows}
+
+
+async def get_routing_rules(pool: asyncpg.Pool) -> list:
+    rows = await pool.fetch(
+        "SELECT vertical, campaign_id FROM instantly_routing ORDER BY vertical"
+    )
+    return [{"vertical": r["vertical"], "campaign_id": r["campaign_id"]} for r in rows]
+
+
+async def set_routing(pool: asyncpg.Pool, vertical: str, campaign_id: str) -> None:
+    """Upsert a vertical→campaign rule. Empty campaign_id clears the rule."""
+    vertical = (vertical or "").strip()
+    campaign_id = (campaign_id or "").strip()
+    if not campaign_id:
+        await pool.execute("DELETE FROM instantly_routing WHERE vertical=$1", vertical)
+        return
+    await pool.execute(
+        """INSERT INTO instantly_routing(vertical, campaign_id) VALUES($1, $2)
+           ON CONFLICT (vertical) DO UPDATE SET campaign_id=$2, updated_at=now()""",
+        vertical, campaign_id,
+    )
+
+
+async def set_lead_instantly_campaign(
+    pool: asyncpg.Pool, run_id: str, lead_id: str, campaign_id: str
+) -> None:
+    await pool.execute(
+        "UPDATE leads SET instantly_campaign_id=$1 WHERE run_id=$2 AND lead_id=$3",
+        campaign_id, run_id, lead_id,
+    )
 
 
 # ── Email Templates ───────────────────────────────────────────────────────────
