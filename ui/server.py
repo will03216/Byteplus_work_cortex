@@ -1627,10 +1627,11 @@ async def email_preview(request: Request, run_id: str):
     return JSONResponse(previews)
 
 
-async def _fetch_instantly_by_email() -> dict:
-    """Fetch all leads in the configured campaign from Instantly, keyed by lowercased email.
+async def _fetch_instantly_by_email(campaign_id: str = "") -> dict:
+    """Fetch all leads in one Instantly campaign, keyed by lowercased email.
     Returns {email: {"sent_at": str|None, "instantly_status": int}}. Empty if not configured."""
-    if not INSTANTLY_API_KEY or not INSTANTLY_CAMPAIGN_ID:
+    campaign_id = (campaign_id or INSTANTLY_CAMPAIGN_ID or "").strip()
+    if not INSTANTLY_API_KEY or not campaign_id:
         return {}
     ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
     by_email: dict = {}
@@ -1640,7 +1641,7 @@ async def _fetch_instantly_by_email() -> dict:
     ) as client:
         starting_after = None
         for _ in range(40):  # paginate, cap at 40 pages (2000 leads)
-            body = {"campaign_id": INSTANTLY_CAMPAIGN_ID, "limit": 50}
+            body = {"campaign_id": campaign_id, "limit": 50}
             if starting_after:
                 body["starting_after"] = starting_after
             resp = await client.post(
@@ -1691,6 +1692,31 @@ def _lead_delivery_status(lead: dict, by_email: dict) -> dict:
     return {"pushed": False, "delivery": "not_pushed", "sent_at": None}
 
 
+async def _resolve_lead_statuses(leads: list) -> dict:
+    """Resolve Instantly delivery status for a set of leads that may span multiple
+    campaigns. Each lead is checked against ITS OWN campaign's live data.
+    Returns {lead_id: {pushed, delivery, sent_at, campaign_id}}."""
+    routing_map = await store.get_routing_map(_pool) if _pool else {}
+    lead_campaign = {l["lead_id"]: _resolve_instantly_campaign(l, routing_map) for l in leads}
+
+    # Fetch each distinct campaign's email map exactly once
+    maps: dict = {}
+    for cid in {c for c in lead_campaign.values() if c}:
+        try:
+            maps[cid] = await _fetch_instantly_by_email(cid)
+        except Exception as exc:
+            logger.warning("Instantly status fetch failed for campaign %s: %s", cid, exc)
+            maps[cid] = {}
+
+    statuses: dict = {}
+    for l in leads:
+        cid = lead_campaign[l["lead_id"]]
+        st = _lead_delivery_status(l, maps.get(cid, {}))
+        st["campaign_id"] = cid
+        statuses[l["lead_id"]] = st
+    return statuses
+
+
 @app.get("/api/runs/{run_id}/instantly-status")
 async def instantly_status(request: Request, run_id: str):
     """Return actual Instantly delivery status per lead (sent / queued / not_pushed)."""
@@ -1700,16 +1726,15 @@ async def instantly_status(request: Request, run_id: str):
     else:
         leads = _read_run_files(RUNS_DIR / run_id)
 
-    if not INSTANTLY_API_KEY or not INSTANTLY_CAMPAIGN_ID:
+    if not INSTANTLY_API_KEY:
         return JSONResponse({"configured": False, "statuses": {}})
 
     try:
-        by_email = await _fetch_instantly_by_email()
+        statuses = await _resolve_lead_statuses(leads)
     except Exception as exc:
         logger.warning("Instantly status fetch failed: %s", exc)
         return JSONResponse({"configured": True, "error": str(exc), "statuses": {}})
 
-    statuses = {l["lead_id"]: _lead_delivery_status(l, by_email) for l in leads}
     return JSONResponse({"configured": True, "statuses": statuses})
 
 
@@ -1724,10 +1749,10 @@ async def export_run(request: Request, run_id: str):
         return JSONResponse({"error": "Run not found"}, status_code=404)
     leads = [l for l in _apply_thresholds(leads) if not _is_excluded(l)]
 
-    # Pull live Instantly status so the export reflects current delivery state
-    by_email: dict = {}
+    # Pull live per-campaign Instantly status so the export reflects current state
+    statuses: dict = {}
     try:
-        by_email = await _fetch_instantly_by_email()
+        statuses = await _resolve_lead_statuses(leads)
     except Exception as exc:
         logger.warning("Export: Instantly status fetch failed: %s", exc)
 
@@ -1737,16 +1762,18 @@ async def export_run(request: Request, run_id: str):
     writer.writerow([
         "name", "company", "company_url", "title", "linkedin_url",
         "decision", "score", "email", "email_subject", "email_body",
-        "pushed_to_instantly", "email_sent", "email_sent_at",
+        "instantly_campaign", "pushed_to_instantly", "email_sent", "email_sent_at",
     ])
     for l in leads:
         email = _build_email(l)
-        status = _lead_delivery_status(l, by_email)
+        status = statuses.get(l["lead_id"], {"pushed": False, "delivery": "not_pushed",
+                                             "sent_at": None, "campaign_id": ""})
         writer.writerow([
             l["name"], l["company"], l.get("company_website", ""),
             l.get("role") or l.get("title", ""), l.get("linkedin_url", ""),
             l["decision"], l["score"], l.get("email", ""),
             email["subject"], email["body"],
+            status.get("campaign_id", ""),
             "yes" if status["pushed"] else "no",
             "yes" if status["delivery"] == "sent" else "no",
             status["sent_at"] or "",
