@@ -2078,6 +2078,17 @@ async def api_set_lead_email(request: Request, run_id: str, lead_id: str):
     return JSONResponse({"ok": True, "email": email})
 
 
+@app.patch("/api/runs/{run_id}/leads/{lead_id}/campaign")
+async def api_set_lead_campaign(request: Request, run_id: str, lead_id: str):
+    """Override which Instantly campaign a single lead is routed to."""
+    _require_auth(request)
+    data = await request.json()
+    campaign_id = (data.get("campaign_id") or "").strip()
+    if _pool:
+        await store.set_lead_instantly_campaign(_pool, run_id, lead_id, campaign_id)
+    return JSONResponse({"ok": True, "campaign_id": campaign_id})
+
+
 # ── API: per-lead manual email status ─────────────────────────────────────────
 
 @app.post("/api/runs/{run_id}/leads/{lead_id}/email-status")

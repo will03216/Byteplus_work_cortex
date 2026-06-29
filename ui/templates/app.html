@@ -354,6 +354,11 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .manual-email-badge.sent     { background:rgba(74,222,128,0.12); color:var(--green); border:1px solid rgba(74,222,128,0.25); }
 .manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
 .email-edit-row { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:10px 12px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; }
+.routing-summary { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
+.routing-summary-title { font-size:11px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-bottom:10px; }
+.routing-summary-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; font-size:13px; border-top:1px solid var(--border); }
+.routing-summary-row:first-of-type { border-top:none; }
+.routing-summary-row span:last-child { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:12px; }
 .email-edit-label { font-size:11px; color:var(--text3); white-space:nowrap; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
 .email-edit-input { flex:1; background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:5px 9px; color:var(--text1); font-size:13px; min-width:0; }
 .email-edit-input:focus { outline:none; border-color:var(--blue); }
@@ -613,6 +618,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
           <div class="scard"><div class="scard-label">For review</div><div class="scard-val amber" id="sum-rev">—</div></div>
           <div class="scard"><div class="scard-label">Disqualified</div><div class="scard-val red" id="sum-dis">—</div></div>
         </div>
+        <div class="routing-summary" id="routing-summary" style="display:none"></div>
         <div class="leads-grid" id="leads"></div>
         <div class="results-load-state" id="results-load-state"></div>
       </main>
@@ -1641,12 +1647,39 @@ function renderRow(l, i) {
             ${l.email ? 'Update' : 'Save'}
           </button>
         </div>
+        ${_destinationRow(l, lid)}
         ${emailHtml}
       </div>
     </div>`;
 }
 
 function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
+
+function _destinationRow(l, lid) {
+  // Only show when at least one campaign is saved (routing is in use)
+  if (!_savedCampaigns.length) return '';
+  const current = l.instantly_campaign_id || '';
+  let opts = `<option value="">Default (${campaignLabel(_routingData.default_campaign_id)})</option>`;
+  _savedCampaigns.forEach(c => {
+    const sel = c.campaign_id === current ? 'selected' : '';
+    opts += `<option value="${c.campaign_id}" ${sel}>${c.label}</option>`;
+  });
+  return `
+    <div class="email-edit-row">
+      <span class="email-edit-label">Campaign →</span>
+      <select class="email-edit-input" onchange="setLeadCampaign(${lid}, this.value)">${opts}</select>
+    </div>`;
+}
+
+async function setLeadCampaign(leadId, campaignId) {
+  await fetch(`/api/runs/${currentRunId}/leads/${encodeURIComponent(leadId)}/campaign`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({campaign_id: campaignId}),
+  });
+  const lead = allLeads.find(l => l.lead_id === leadId);
+  if (lead) lead.instantly_campaign_id = campaignId;
+  renderRoutingSummary(allLeads);
+}
 
 async function saveManualEmail(leadId) {
   const input = document.getElementById('mei-' + leadId);
@@ -2577,11 +2610,58 @@ async function loadRun(runId) {
   emailPreviews = {};
   (Array.isArray(previews) ? previews : []).forEach(p => { emailPreviews[p.lead_id] = p; });
   instantlyStatus = {};
+  await ensureRoutingLoaded();
   updateSendButton();
   populateResults(leads, runId);
   renderHome();
   show('s-results');
   loadInstantlyStatus(runId);
+}
+
+// Load saved campaigns + routing rules once, for results-screen labels/dropdowns
+let _routingLoaded = false;
+async function ensureRoutingLoaded(force) {
+  if (_routingLoaded && !force) return;
+  try {
+    const [camps, routing] = await Promise.all([
+      fetch('/api/instantly/campaigns').then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch('/api/instantly/routing').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    _savedCampaigns = Array.isArray(camps) ? camps : [];
+    if (routing) _routingData = routing;
+    _routingLoaded = true;
+  } catch (e) { /* non-fatal */ }
+}
+
+function campaignLabel(cid) {
+  if (!cid) return 'Default';
+  const c = _savedCampaigns.find(x => x.campaign_id === cid);
+  if (c) return c.label;
+  if (cid === _routingData.default_campaign_id) return 'Default';
+  return cid.slice(0, 8) + '…';
+}
+
+function renderRoutingSummary(leads) {
+  const el = document.getElementById('routing-summary');
+  if (!el) return;
+  // Only show when at least one campaign is configured (routing in use)
+  if (!_savedCampaigns.length && !Object.keys(_routingData.rules || {}).length) {
+    el.innerHTML = ''; el.style.display = 'none'; return;
+  }
+  const counts = {};
+  leads.forEach(l => {
+    const cid = (l.instantly_campaign_id || _routingData.default_campaign_id || '');
+    counts[cid] = counts[cid] || { total: 0 };
+    counts[cid].total++;
+  });
+  const rows = Object.entries(counts).map(([cid, c]) => {
+    const saved = _savedCampaigns.find(x => x.campaign_id === cid);
+    const warn = saved && saved.live_status !== 1
+      ? ` <span style="color:var(--amber)" title="Campaign not active in Instantly">⚠</span>` : '';
+    return `<div class="routing-summary-row"><span>${campaignLabel(cid)}${warn}</span><span>${c.total} leads</span></div>`;
+  }).join('');
+  el.style.display = '';
+  el.innerHTML = `<div class="routing-summary-title">Outreach routing</div>${rows}`;
 }
 
 async function loadInstantlyStatus(runId) {
@@ -2639,6 +2719,7 @@ function populateResults(leads, runId) {
   document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.toggle('active', chip.dataset.filter === 'all'));
   document.querySelector('.results-main').scrollTop = 0;
   renderResultsRuns(getResultsContextRuns());
+  renderRoutingSummary(leads);
   renderLeads('all');
 }
 
