@@ -690,6 +690,7 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
         <button class="stab active" id="stab-pipeline"    onclick="switchSettingsTab('pipeline')">Pipeline</button>
         <button class="stab"        id="stab-exclusions"  onclick="switchSettingsTab('exclusions')">Exclusions</button>
         <button class="stab"        id="stab-templates"   onclick="switchSettingsTab('templates')">Email Templates</button>
+        <button class="stab"        id="stab-routing"     onclick="switchSettingsTab('routing')">Routing</button>
       </div>
 
       <!-- Tab: Pipeline -->
@@ -790,6 +791,33 @@ select.tmpl-form-input { appearance:none; cursor:pointer; }
             <div class="tmpl-form-actions">
               <button class="settings-save-btn" onclick="saveTmpl()">Save template</button>
               <button class="settings-save-btn" onclick="toggleTmplForm()" style="color:var(--text3)">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Routing -->
+      <div class="stab-panel" id="stab-panel-routing">
+        <div class="settings-two-col">
+          <div class="settings-col">
+            <div class="settings-section">
+              <div class="settings-section-title">Saved Instantly Campaigns</div>
+              <div class="settings-section-sub">Add the outreach campaigns you send into. The ID is validated against Instantly so you can see if it's active before routing leads to it.</div>
+              <div class="exclusion-add-row">
+                <input type="text" class="exclusion-input" id="ic-label" placeholder="Label (e.g. EU Film Studios)" style="flex:1">
+              </div>
+              <div class="exclusion-add-row">
+                <input type="text" class="exclusion-input" id="ic-id" placeholder="Instantly campaign ID (UUID)" style="flex:1">
+                <button class="settings-save-btn" onclick="addInstantlyCampaign()">Add</button>
+              </div>
+              <div class="exclusion-list" id="ic-list"><div class="exclusion-empty">Loading…</div></div>
+            </div>
+          </div>
+          <div class="settings-col">
+            <div class="settings-section">
+              <div class="settings-section-title">Vertical → Campaign Routing</div>
+              <div class="settings-section-sub">When you send a run, each lead is routed to the campaign matching its vertical. Unmapped verticals fall back to the default <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">INSTANTLY_CAMPAIGN_ID</code>.</div>
+              <div id="routing-table"><div class="exclusion-empty">Loading…</div></div>
             </div>
           </div>
         </div>
@@ -1790,10 +1818,102 @@ async function confirmSendEmails() {
 // ── Settings ───────────────────────────────────────────────────────────────────
 
 function switchSettingsTab(tab) {
-  ['pipeline','exclusions','templates'].forEach(t => {
+  ['pipeline','exclusions','templates','routing'].forEach(t => {
     document.getElementById('stab-' + t).classList.toggle('active', t === tab);
     document.getElementById('stab-panel-' + t).classList.toggle('active', t === tab);
   });
+  if (tab === 'routing') loadRouting();
+}
+
+// ── Routing (multi-campaign) ───────────────────────────────────────────────
+let _savedCampaigns = [];
+let _routingData = { verticals: [], rules: {}, default_campaign_id: '' };
+
+function _campaignStatusLabel(s) {
+  const map = {0:'draft', 1:'active', 2:'paused', 3:'completed', '-99':'error'};
+  const cls = s === 1 ? 'on' : 'off';
+  return `<span class="apollo-status ${cls}" style="display:inline-block">${map[s] || 'unknown'}</span>`;
+}
+
+async function loadRouting() {
+  const [camps, routing] = await Promise.all([
+    fetch('/api/instantly/campaigns').then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch('/api/instantly/routing').then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+  _savedCampaigns = Array.isArray(camps) ? camps : [];
+  if (routing) _routingData = routing;
+  renderSavedCampaigns();
+  renderRoutingTable();
+}
+
+function renderSavedCampaigns() {
+  const el = document.getElementById('ic-list');
+  if (!el) return;
+  if (!_savedCampaigns.length) {
+    el.innerHTML = '<div class="exclusion-empty">No campaigns saved yet.</div>';
+    return;
+  }
+  el.innerHTML = _savedCampaigns.map(c => `
+    <div class="exclusion-item">
+      <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+        <span style="font-weight:600">${c.label}</span>
+        <span style="font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">${c.campaign_id}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${c.exists ? _campaignStatusLabel(c.live_status) : '<span class="apollo-status off">not found</span>'}
+        <button class="copy-btn" onclick="removeInstantlyCampaign(${c.id})">Remove</button>
+      </div>
+    </div>`).join('');
+}
+
+function renderRoutingTable() {
+  const el = document.getElementById('routing-table');
+  if (!el) return;
+  const opts = (selected) => {
+    let html = `<option value="">— default —</option>`;
+    _savedCampaigns.forEach(c => {
+      html += `<option value="${c.campaign_id}" ${c.campaign_id === selected ? 'selected' : ''}>${c.label}</option>`;
+    });
+    return html;
+  };
+  el.innerHTML = _routingData.verticals.map(v => {
+    const current = _routingData.rules[v.key] || '';
+    return `
+    <div class="exclusion-item">
+      <span style="min-width:0">${v.label}</span>
+      <select class="tmpl-form-input" style="max-width:200px" onchange="setRouting('${v.key}', this.value)">
+        ${opts(current)}
+      </select>
+    </div>`;
+  }).join('');
+}
+
+async function addInstantlyCampaign() {
+  const label = document.getElementById('ic-label').value.trim();
+  const campaign_id = document.getElementById('ic-id').value.trim();
+  if (!label || !campaign_id) { alert('Enter both a label and a campaign ID.'); return; }
+  const res = await fetch('/api/instantly/campaigns', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({label, campaign_id}),
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || 'Failed to add campaign.'); return; }
+  document.getElementById('ic-label').value = '';
+  document.getElementById('ic-id').value = '';
+  await loadRouting();
+}
+
+async function removeInstantlyCampaign(id) {
+  await fetch('/api/instantly/campaigns/' + id, { method: 'DELETE' });
+  await loadRouting();
+}
+
+async function setRouting(vertical, campaign_id) {
+  await fetch('/api/instantly/routing', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({vertical, campaign_id}),
+  });
+  _routingData.rules[vertical] = campaign_id;
 }
 
 async function openSettings() {

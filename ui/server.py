@@ -1843,6 +1843,108 @@ async def send_emails(request: Request, run_id: str):
                          "by_campaign": by_campaign})
 
 
+# ── API: Instantly campaigns & routing ───────────────────────────────────────
+
+# Canonical verticals leads classify into (matches the email-template selector)
+_ROUTING_VERTICALS = [
+    {"key": "ai_tools",        "label": "AI Tools"},
+    {"key": "film_production", "label": "Film / Production"},
+    {"key": "vfx_production",  "label": "VFX Production"},
+    {"key": "animation",       "label": "Animation"},
+    {"key": "short_drama",     "label": "Short Drama"},
+    {"key": "ecommerce",       "label": "E-commerce / Ads"},
+    {"key": "ai_generic",      "label": "Everything else (default)"},
+]
+
+
+async def _validate_instantly_campaign_status(campaign_id: str) -> dict:
+    """Check a campaign ID against Instantly. Returns {exists, status, name}."""
+    if not INSTANTLY_API_KEY or not campaign_id:
+        return {"exists": False, "status": None, "name": ""}
+    ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+    try:
+        async with httpx.AsyncClient(
+            timeout=15, verify=ssl_verify,
+            headers={"Authorization": f"Bearer {INSTANTLY_API_KEY}"},
+        ) as client:
+            r = await client.get(f"https://api.instantly.ai/api/v2/campaigns/{campaign_id}")
+            if r.status_code == 200:
+                d = r.json()
+                return {"exists": True, "status": d.get("status"), "name": d.get("name", "")}
+            return {"exists": False, "status": None, "name": ""}
+    except Exception as exc:
+        logger.warning("Campaign validation failed for %s: %s", campaign_id, exc)
+        return {"exists": False, "status": None, "name": "", "error": str(exc)}
+
+
+@app.get("/api/instantly/campaigns")
+async def api_list_instantly_campaigns(request: Request):
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse([])
+    rows = await store.list_instantly_campaigns(_pool)
+    # Annotate each with live Instantly status (active/paused/etc.)
+    for row in rows:
+        info = await _validate_instantly_campaign_status(row["campaign_id"])
+        row["live_status"] = info.get("status")
+        row["exists"] = info.get("exists", False)
+    return JSONResponse(rows)
+
+
+@app.post("/api/instantly/campaigns")
+async def api_add_instantly_campaign(request: Request):
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse({"error": "Database required"}, status_code=400)
+    body = await request.json()
+    label = (body.get("label") or "").strip()
+    campaign_id = (body.get("campaign_id") or "").strip()
+    if not label or not campaign_id:
+        return JSONResponse({"error": "label and campaign_id are required"}, status_code=400)
+    info = await _validate_instantly_campaign_status(campaign_id)
+    if not info.get("exists"):
+        return JSONResponse({"error": "Campaign ID not found in Instantly — check the ID"},
+                            status_code=400)
+    row = await store.add_instantly_campaign(_pool, label, campaign_id)
+    row["live_status"] = info.get("status")
+    row["exists"] = True
+    return JSONResponse(row)
+
+
+@app.delete("/api/instantly/campaigns/{row_id}")
+async def api_remove_instantly_campaign(request: Request, row_id: int):
+    _require_auth(request)
+    if _pool:
+        await store.remove_instantly_campaign(_pool, row_id)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/instantly/routing")
+async def api_get_routing(request: Request):
+    _require_auth(request)
+    rules = await store.get_routing_map(_pool) if _pool else {}
+    return JSONResponse({
+        "verticals": _ROUTING_VERTICALS,
+        "rules": rules,
+        "default_campaign_id": INSTANTLY_CAMPAIGN_ID,
+    })
+
+
+@app.post("/api/instantly/routing")
+async def api_set_routing(request: Request):
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse({"error": "Database required"}, status_code=400)
+    body = await request.json()
+    vertical = (body.get("vertical") or "").strip()
+    campaign_id = (body.get("campaign_id") or "").strip()
+    valid_keys = {v["key"] for v in _ROUTING_VERTICALS}
+    if vertical not in valid_keys:
+        return JSONResponse({"error": f"Unknown vertical '{vertical}'"}, status_code=400)
+    await store.set_routing(_pool, vertical, campaign_id)
+    return JSONResponse({"ok": True, "vertical": vertical, "campaign_id": campaign_id})
+
+
 # ── API: settings ─────────────────────────────────────────────────────────────
 
 @app.get("/api/settings")
