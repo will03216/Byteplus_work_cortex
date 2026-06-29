@@ -76,7 +76,11 @@ Auth is session-based (`SessionMiddleware`). Credentials from `APP_USERNAME` / `
 
 ### Persistence (`db/store.py`)
 
-asyncpg connection pool. Schema created automatically on first startup via `store.create_tables()`. If `DATABASE_URL` is not set, the app runs in-memory-only mode (no run history across restarts). Key tables: `campaigns`, `runs`, `leads`, `settings`, `campaign_settings`, `exclusions`, `email_templates`.
+asyncpg connection pool. Schema created automatically on first startup via `store.create_tables()`. If `DATABASE_URL` is not set, the app runs in-memory-only mode (no run history across restarts). Key tables: `campaigns`, `runs`, `leads`, `settings`, `campaign_settings`, `exclusions`, `email_templates`, `instantly_campaigns`, `instantly_routing`.
+
+### Multi-campaign Instantly routing
+
+Outreach can fan out to multiple Instantly campaigns. `instantly_campaigns` stores a saved registry (label + external campaign id); `instantly_routing` maps a lead **vertical** → campaign. Each lead's target resolves as **per-lead override (`leads.instantly_campaign_id`) → vertical routing map → `INSTANTLY_CAMPAIGN_ID` default**. Configured in the UI under Settings → Routing. At send time `send_emails` groups eligible leads by resolved campaign and pushes each group via `_send_to_instantly(leads, campaign_id)`. Status badges and CSV export query each lead against its own campaign. Empty routing map = everything to the default campaign (unchanged single-campaign behavior).
 
 ### LLM client (`llm/client.py`)
 

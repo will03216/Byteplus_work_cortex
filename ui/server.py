@@ -884,13 +884,14 @@ async def _import_to_db(run_id: str, run_dir: Path, returncode: int, campaign_id
     routing_map = await store.get_routing_map(_pool)
     for lead in leads:
         await store.upsert_lead(_pool, run_id, lead)
-        # Resolve & persist the Instantly campaign this lead is destined for
-        # (vertical routing map → global default). Overridable later per lead.
-        target_campaign = _resolve_instantly_campaign(lead, routing_map)
-        if target_campaign:
+        # Persist only an explicit vertical-rule match. Leads with no rule stay
+        # NULL so they resolve to the live map/default at send time — meaning a
+        # routing rule added *after* the run still applies to them.
+        mapped = routing_map.get(_lead_vertical(lead)) if routing_map else None
+        if mapped:
             await store.set_lead_instantly_campaign(
-                _pool, run_id, lead.get("lead_id", ""), target_campaign)
-            lead["instantly_campaign_id"] = target_campaign
+                _pool, run_id, lead.get("lead_id", ""), mapped)
+            lead["instantly_campaign_id"] = mapped
         fit_summary = {
             "decision": lead.get("decision"),
             "score": lead.get("score", 0),
