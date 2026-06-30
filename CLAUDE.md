@@ -82,6 +82,10 @@ asyncpg connection pool. Schema created automatically on first startup via `stor
 
 Outreach can fan out to multiple Instantly campaigns. `instantly_campaigns` stores a saved registry (label + external campaign id); `instantly_routing` maps a lead **vertical** → campaign. Each lead's target resolves as **per-lead override (`leads.instantly_campaign_id`) → vertical routing map → `INSTANTLY_CAMPAIGN_ID` default**. Configured in the UI under Settings → Routing. At send time `send_emails` groups eligible leads by resolved campaign and pushes each group via `_send_to_instantly(leads, campaign_id)`. Status badges and CSV export query each lead against its own campaign. Empty routing map = everything to the default campaign (unchanged single-campaign behavior).
 
+**Instantly custom variables.** Cortex forwards two custom variables in each lead's payload, referenced as placeholders in the Instantly **sequence** (so Cortex templates need not change):
+- `{{email_subject}}` — the Cortex per-vertical email subject.
+- `{{pain_point}}` — a per-campaign opening hook. Each saved campaign can hold a pasted **meeting note / transcript** (`instantly_campaigns.meeting_note`); `_extract_pain_point` distills it via the LLM into one editable sentence (`instantly_campaigns.pain_point`), set under Settings → Routing → a campaign's "Meeting note → pain point" box. `_send_to_instantly` loads it once per batch and forwards it (empty string when unset, so the placeholder always resolves). **One-time setup per campaign:** edit the Instantly sequence to include `{{pain_point}}` (e.g. as the opening line) — text is pasted, never fetched by URL, so it deploys without any external auth.
+
 ### LLM client (`llm/client.py`)
 
 Wraps LiteLLM so any provider (Anthropic Claude, BytePlus ModelArk, OpenAI, etc.) works via `.env` config:
