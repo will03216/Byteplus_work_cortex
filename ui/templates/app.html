@@ -346,6 +346,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .lead-row.excluded { opacity:0.38; }
 .lead-row.excluded:hover { opacity:0.52; }
 .customer-badge { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(255,255,255,0.05); color:var(--text3); border:1px solid var(--border); margin-left:7px; vertical-align:middle; letter-spacing:0.03em; }
+.vertical-badge { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(96,165,250,0.12); color:#60a5fa; border:1px solid rgba(96,165,250,0.2); margin-left:7px; vertical-align:middle; letter-spacing:0.03em; }
 .import-csv-row { display:flex; align-items:center; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
 .import-csv-label { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; flex:1; line-height:1.5; }
 .leads-grid.rerendering { opacity: 0; }
@@ -355,10 +356,16 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
 .email-edit-row { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:10px 12px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; }
 .routing-summary { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
-.routing-summary-title { font-size:11px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; margin-bottom:10px; }
-.routing-summary-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; font-size:13px; border-top:1px solid var(--border); }
-.routing-summary-row:first-of-type { border-top:none; }
-.routing-summary-row span:last-child { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:12px; }
+.routing-summary-header { display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; user-select:none; }
+.routing-summary-header:hover .routing-summary-title { color:var(--text2); }
+.routing-summary-title { font-size:11px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; transition:color 0.12s; }
+.routing-summary-meta { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.routing-group-head { display:flex; justify-content:space-between; align-items:center; padding:8px 0 5px; margin-top:6px; font-size:13px; font-weight:600; border-top:1px solid var(--border); }
+.routing-group-head:first-of-type { border-top:none; margin-top:0; }
+.routing-group-head span:last-child { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; font-weight:400; }
+.routing-lead-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0 3px 14px; font-size:12px; }
+.routing-lead-name { color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.routing-vertical { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; background:var(--bg3); padding:1px 7px; border-radius:4px; white-space:nowrap; margin-left:8px; }
 .email-edit-label { font-size:11px; color:var(--text3); white-space:nowrap; font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
 .email-edit-input { flex:1; background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:5px 9px; color:var(--text1); font-size:13px; min-width:0; }
 .email-edit-input:focus { outline:none; border-color:var(--blue); }
@@ -1556,27 +1563,6 @@ function renderRow(l, i) {
   const lid = JSON.stringify(l.lead_id).replace(/"/g,'&quot;');
   const preview = emailPreviews[l.lead_id];
   const emailHtml = preview ? (() => {
-    // Live Instantly status is authoritative; fall back to the DB push flag
-    // until the async status fetch completes.
-    const status = instantlyStatus[l.lead_id];
-    const isPushed = status ? !!status.pushed : !!preview.email_sent;
-    const isSent   = !!(status && status.delivery === 'sent');
-    const isQueued = !!(status && status.delivery === 'queued');
-
-    const pushedTag = isPushed
-      ? `<span class="email-sent-badge" title="Lead handed off to Instantly">✓ Pushed to Instantly</span>`
-      : '';
-    let deliveryTag = '';
-    if (isSent) {
-      const when = status.sent_at ? new Date(status.sent_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
-      deliveryTag = `<span class="email-delivery-badge sent" title="Email delivered via Instantly">✉ Email sent${when ? ' · ' + when : ''}</span>`;
-    } else if (isQueued) {
-      deliveryTag = `<span class="email-delivery-badge queued" title="In Instantly queue, not yet delivered">⏳ Queued in Instantly</span>`;
-    }
-    // Manual badge only when the lead has NOT been pushed (it won't auto-send)
-    const manualTag = (preview.is_manual && !isPushed)
-      ? `<span class="manual-badge">★ High value — send manually</span>`
-      : '';
     const emailAddr = (l.email || '').trim();
     const emailStatusLabel = l.email_status ? ` <span style="font-size:10px;opacity:0.6;">(${l.email_status})</span>` : '';
     const emailRow = emailAddr
@@ -1587,7 +1573,7 @@ function renderRow(l, i) {
       : '';
     return `<div class="email-preview">
       <div class="email-preview-title">Email Preview</div>
-      ${manualTag}${pushedTag}${deliveryTag}
+      <span class="delivery-badges" id="dlv-${l.lead_id}">${deliveryBadgesHtml(l)}</span>
       ${emailRow}
       <div class="email-subject">
         <span>Subject: <span>${preview.subject}</span></span>
@@ -1604,12 +1590,13 @@ function renderRow(l, i) {
   })() : '';
 
   const customerBadge = l.excluded ? '<span class="customer-badge">existing customer</span>' : '';
+  const verticalBadge = l.vertical ? `<span class="vertical-badge">${verticalLabel(l.vertical)}</span>` : '';
   return `
     <div class="lead-row${l.excluded ? ' excluded' : ''}" id="lr-${i}" data-render-index="${i}">
       <div class="lead-summary" onclick="toggle(${i})">
         <div class="avatar" style="background:${abg};color:${afg}">${initials(l.name)}</div>
         <div>
-          <div class="lead-name">${l.name}${customerBadge}</div>
+          <div class="lead-name">${l.name}${verticalBadge}${customerBadge}</div>
           <div class="lead-company">${companyMeta}</div>
           ${(industryMeta || companySizeMeta) ? `<div class="lead-company-extra">${[industryMeta, companySizeMeta].filter(Boolean).join(' · ')}</div>` : ''}
         </div>
@@ -1655,13 +1642,56 @@ function renderRow(l, i) {
 
 function toggle(i) { document.getElementById('lr-' + i).classList.toggle('open'); }
 
+// Build the Pushed / Email-sent / Queued / manual badges for one lead.
+// Live Instantly status is authoritative; before it loads we fall back to the
+// DB push flag so the "Pushed to Instantly" badge shows immediately.
+function deliveryBadgesHtml(l) {
+  const preview = emailPreviews[l.lead_id];
+  if (!preview) return '';
+  const status = instantlyStatus[l.lead_id];
+  const isPushed = status ? !!status.pushed : !!preview.email_sent;
+  const isSent   = !!(status && status.delivery === 'sent');
+  const isQueued = !!(status && status.delivery === 'queued');
+  const pushedTag = isPushed
+    ? `<span class="email-sent-badge" title="Lead handed off to Instantly">✓ Pushed to Instantly</span>`
+    : '';
+  let deliveryTag = '';
+  if (isSent) {
+    const when = status.sent_at ? new Date(status.sent_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+    deliveryTag = `<span class="email-delivery-badge sent" title="Email delivered via Instantly">✉ Email sent${when ? ' · ' + when : ''}</span>`;
+  } else if (isQueued) {
+    deliveryTag = `<span class="email-delivery-badge queued" title="In Instantly queue, not yet delivered">⏳ Queued in Instantly</span>`;
+  }
+  const manualTag = (preview.is_manual && !isPushed)
+    ? `<span class="manual-badge">★ High value — send manually</span>`
+    : '';
+  return `${manualTag}${pushedTag}${deliveryTag}`;
+}
+
+// Update only the badge spans in place — avoids a full lead-list re-render
+// (and its flicker) when live Instantly status arrives.
+function applyDeliveryBadges() {
+  allLeads.forEach(l => {
+    const el = document.getElementById('dlv-' + l.lead_id);
+    if (el) el.innerHTML = deliveryBadgesHtml(l);
+  });
+}
+
+// Resolve a lead's destination the same way the backend does at send time:
+// per-lead override → vertical routing rule → global default.
+function resolveLeadCampaign(l) {
+  const rules = _routingData.rules || {};
+  return (l.instantly_campaign_id || rules[l.vertical] || _routingData.default_campaign_id || '');
+}
+
 function _destinationRow(l, lid) {
   // Only show when at least one campaign is saved (routing is in use)
   if (!_savedCampaigns.length) return '';
-  const current = l.instantly_campaign_id || '';
-  let opts = `<option value="">Default (${campaignLabel(_routingData.default_campaign_id)})</option>`;
+  const resolved = resolveLeadCampaign(l);
+  const isDefault = !resolved || resolved === _routingData.default_campaign_id;
+  let opts = `<option value="" ${isDefault ? 'selected' : ''}>Default (${campaignLabel(_routingData.default_campaign_id)})</option>`;
   _savedCampaigns.forEach(c => {
-    const sel = c.campaign_id === current ? 'selected' : '';
+    const sel = (!isDefault && c.campaign_id === resolved) ? 'selected' : '';
     opts += `<option value="${c.campaign_id}" ${sel}>${c.label}</option>`;
   });
   return `
@@ -2641,6 +2671,17 @@ function campaignLabel(cid) {
   return cid.slice(0, 8) + '…';
 }
 
+function verticalLabel(key) {
+  const v = (_routingData.verticals || []).find(x => x.key === key);
+  return v ? v.label : (key || '—');
+}
+
+let _routingExpanded = false;
+function toggleRoutingSummary() {
+  _routingExpanded = !_routingExpanded;
+  renderRoutingSummary(allLeads);
+}
+
 function renderRoutingSummary(leads) {
   const el = document.getElementById('routing-summary');
   if (!el) return;
@@ -2648,20 +2689,33 @@ function renderRoutingSummary(leads) {
   if (!_savedCampaigns.length && !Object.keys(_routingData.rules || {}).length) {
     el.innerHTML = ''; el.style.display = 'none'; return;
   }
-  const counts = {};
+  // Group leads by their resolved destination campaign (override → rule → default)
+  const groups = {};
   leads.forEach(l => {
-    const cid = (l.instantly_campaign_id || _routingData.default_campaign_id || '');
-    counts[cid] = counts[cid] || { total: 0 };
-    counts[cid].total++;
+    const cid = resolveLeadCampaign(l);
+    (groups[cid] = groups[cid] || []).push(l);
   });
-  const rows = Object.entries(counts).map(([cid, c]) => {
-    const saved = _savedCampaigns.find(x => x.campaign_id === cid);
-    const warn = saved && saved.live_status !== 1
-      ? ` <span style="color:var(--amber)" title="Campaign not active in Instantly">⚠</span>` : '';
-    return `<div class="routing-summary-row"><span>${campaignLabel(cid)}${warn}</span><span>${c.total} leads</span></div>`;
-  }).join('');
+  const nCampaigns = Object.keys(groups).length;
+  const chevron = _routingExpanded ? '▼' : '▶';
+
+  let html = `<div class="routing-summary-header" onclick="toggleRoutingSummary()">
+      <span class="routing-summary-title">${chevron}&nbsp;&nbsp;Outreach routing</span>
+      <span class="routing-summary-meta">${leads.length} lead${leads.length !== 1 ? 's' : ''} · ${nCampaigns} campaign${nCampaigns !== 1 ? 's' : ''}</span>
+    </div>`;
+
+  Object.entries(groups).forEach(([cid, ls]) => {
+    html += `<div class="routing-group-head"><span>${campaignLabel(cid)}</span><span>${ls.length} lead${ls.length !== 1 ? 's' : ''}</span></div>`;
+    if (_routingExpanded) {
+      ls.forEach(l => {
+        html += `<div class="routing-lead-row">
+          <span class="routing-lead-name">${l.name || '—'}${l.company ? ' · ' + l.company : ''}</span>
+          <span class="routing-vertical">${verticalLabel(l.vertical)}</span>
+        </div>`;
+      });
+    }
+  });
   el.style.display = '';
-  el.innerHTML = `<div class="routing-summary-title">Outreach routing</div>${rows}`;
+  el.innerHTML = html;
 }
 
 async function loadInstantlyStatus(runId) {
@@ -2671,7 +2725,7 @@ async function loadInstantlyStatus(runId) {
     const data = await res.json();
     if (!data.configured || !data.statuses) return;
     instantlyStatus = data.statuses;
-    if (runId === currentRunId) renderLeads(currentFilter);
+    if (runId === currentRunId) applyDeliveryBadges();
   } catch (e) { /* non-fatal */ }
 }
 

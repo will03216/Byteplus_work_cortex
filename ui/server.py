@@ -548,6 +548,16 @@ def _resolve_instantly_campaign(lead: dict, routing_map: dict) -> str:
     return mapped or INSTANTLY_CAMPAIGN_ID
 
 
+def _with_vertical(leads: list) -> list:
+    """Annotate each lead with its resolved vertical key (for the routing UI)."""
+    out = []
+    for l in leads:
+        d = dict(l)
+        d["vertical"] = _lead_vertical(l)
+        out.append(d)
+    return out
+
+
 def _build_email(lead: dict) -> dict:
     first_name = (lead.get("name") or "there").split()[0]
     company    = lead.get("company") or "your company"
@@ -990,7 +1000,7 @@ async def get_results(request: Request, run_id: str):
         leads = _read_run_files(RUNS_DIR / run_id)
     else:
         return JSONResponse([], status_code=404)
-    return JSONResponse(_mark_exclusions(_apply_thresholds(leads)))
+    return JSONResponse(_mark_exclusions(_apply_thresholds(_with_vertical(leads))))
 
 
 # ── API: agent memory and profiling ───────────────────────────────────────────
@@ -1426,7 +1436,7 @@ async def api_get_campaign_run(request: Request, campaign_id: str, run_id: str):
         leads = _read_run_files(RUNS_DIR / run_id)
     else:
         return JSONResponse([], status_code=404)
-    return JSONResponse(_mark_exclusions(_apply_thresholds(leads)))
+    return JSONResponse(_mark_exclusions(_apply_thresholds(_with_vertical(leads))))
 
 
 # ── API: campaign-scoped settings ─────────────────────────────────────────────
@@ -1628,12 +1638,30 @@ async def email_preview(request: Request, run_id: str):
     return JSONResponse(previews)
 
 
+# Short-lived cache of per-campaign Instantly lead maps. Delivery status changes
+# on Instantly's own (slow) schedule, so a brief TTL is safe and makes repeat
+# views / filter switches instant instead of re-paginating the API each time.
+_instantly_cache: dict = {}          # campaign_id -> (fetched_at_epoch, by_email)
+_INSTANTLY_CACHE_TTL = 45            # seconds
+
+
+def _invalidate_instantly_cache(campaign_id: str = "") -> None:
+    if campaign_id:
+        _instantly_cache.pop(campaign_id, None)
+    else:
+        _instantly_cache.clear()
+
+
 async def _fetch_instantly_by_email(campaign_id: str = "") -> dict:
     """Fetch all leads in one Instantly campaign, keyed by lowercased email.
     Returns {email: {"sent_at": str|None, "instantly_status": int}}. Empty if not configured."""
+    import time
     campaign_id = (campaign_id or INSTANTLY_CAMPAIGN_ID or "").strip()
     if not INSTANTLY_API_KEY or not campaign_id:
         return {}
+    cached = _instantly_cache.get(campaign_id)
+    if cached and (time.time() - cached[0]) < _INSTANTLY_CACHE_TTL:
+        return cached[1]
     ssl_verify = os.getenv("LLM_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
     by_email: dict = {}
     async with httpx.AsyncClient(
@@ -1641,8 +1669,8 @@ async def _fetch_instantly_by_email(campaign_id: str = "") -> dict:
         headers={"Authorization": f"Bearer {INSTANTLY_API_KEY}"},
     ) as client:
         starting_after = None
-        for _ in range(40):  # paginate, cap at 40 pages (2000 leads)
-            body = {"campaign_id": campaign_id, "limit": 50}
+        for _ in range(20):  # paginate, cap at 20 pages (2000 leads @ 100/page)
+            body = {"campaign_id": campaign_id, "limit": 100}
             if starting_after:
                 body["starting_after"] = starting_after
             resp = await client.post(
@@ -1667,6 +1695,7 @@ async def _fetch_instantly_by_email(campaign_id: str = "") -> dict:
             starting_after = data.get("next_starting_after")
             if not starting_after or not items:
                 break
+    _instantly_cache[campaign_id] = (time.time(), by_email)
     return by_email
 
 
@@ -1700,14 +1729,19 @@ async def _resolve_lead_statuses(leads: list) -> dict:
     routing_map = await store.get_routing_map(_pool) if _pool else {}
     lead_campaign = {l["lead_id"]: _resolve_instantly_campaign(l, routing_map) for l in leads}
 
-    # Fetch each distinct campaign's email map exactly once
+    # Fetch each distinct campaign's email map once, in parallel
+    campaign_ids = list({c for c in lead_campaign.values() if c})
+    results = await asyncio.gather(
+        *[_fetch_instantly_by_email(cid) for cid in campaign_ids],
+        return_exceptions=True,
+    )
     maps: dict = {}
-    for cid in {c for c in lead_campaign.values() if c}:
-        try:
-            maps[cid] = await _fetch_instantly_by_email(cid)
-        except Exception as exc:
-            logger.warning("Instantly status fetch failed for campaign %s: %s", cid, exc)
+    for cid, res in zip(campaign_ids, results):
+        if isinstance(res, Exception):
+            logger.warning("Instantly status fetch failed for campaign %s: %s", cid, res)
             maps[cid] = {}
+        else:
+            maps[cid] = res
 
     statuses: dict = {}
     for l in leads:
@@ -1826,6 +1860,7 @@ async def send_emails(request: Request, run_id: str):
             sent_ids = await _send_to_instantly(group, cid)
             all_sent_ids.extend(sent_ids)
             by_campaign[cid] = len(sent_ids)
+            _invalidate_instantly_cache(cid)  # next status fetch reflects the send
     except Exception as exc:
         return JSONResponse({"error": f"Instantly API error: {exc}"}, status_code=502)
 
