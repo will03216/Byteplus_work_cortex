@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS instantly_campaigns (
     id            SERIAL      PRIMARY KEY,
     label         TEXT        NOT NULL,
     campaign_id   TEXT        NOT NULL UNIQUE,
+    meeting_note  TEXT        NOT NULL DEFAULT '',
+    pain_point    TEXT        NOT NULL DEFAULT '',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -282,6 +284,9 @@ async def create_tables(pool: asyncpg.Pool) -> None:
                    campaign_id TEXT NOT NULL UNIQUE,
                    created_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
         )
+        # Per-campaign meeting note + extracted pain point (for {{pain_point}})
+        await conn.execute("ALTER TABLE instantly_campaigns ADD COLUMN IF NOT EXISTS meeting_note TEXT NOT NULL DEFAULT ''")
+        await conn.execute("ALTER TABLE instantly_campaigns ADD COLUMN IF NOT EXISTS pain_point TEXT NOT NULL DEFAULT ''")
         await conn.execute(
             """CREATE TABLE IF NOT EXISTS instantly_routing (
                    vertical TEXT PRIMARY KEY, campaign_id TEXT NOT NULL,
@@ -1510,13 +1515,33 @@ async def remove_exclusion(pool: asyncpg.Pool, exclusion_id: int) -> None:
 
 async def list_instantly_campaigns(pool: asyncpg.Pool) -> list:
     rows = await pool.fetch(
-        "SELECT id, label, campaign_id, created_at FROM instantly_campaigns ORDER BY label"
+        """SELECT id, label, campaign_id, meeting_note, pain_point, created_at
+             FROM instantly_campaigns ORDER BY label"""
     )
     return [
         {"id": r["id"], "label": r["label"], "campaign_id": r["campaign_id"],
+         "meeting_note": r["meeting_note"] or "", "pain_point": r["pain_point"] or "",
          "created_at": r["created_at"].isoformat() if r["created_at"] else None}
         for r in rows
     ]
+
+
+async def set_campaign_note(pool: asyncpg.Pool, campaign_id: str,
+                            meeting_note: str, pain_point: str) -> None:
+    """Persist a campaign's meeting note + extracted pain point."""
+    await pool.execute(
+        """UPDATE instantly_campaigns SET meeting_note=$2, pain_point=$3
+             WHERE campaign_id=$1""",
+        campaign_id.strip(), meeting_note or "", pain_point or "",
+    )
+
+
+async def get_campaign_pain_points(pool: asyncpg.Pool) -> dict:
+    """Return {campaign_id: pain_point} for all campaigns that have one set."""
+    rows = await pool.fetch(
+        "SELECT campaign_id, pain_point FROM instantly_campaigns WHERE pain_point <> ''"
+    )
+    return {r["campaign_id"]: r["pain_point"] for r in rows}
 
 
 async def add_instantly_campaign(pool: asyncpg.Pool, label: str, campaign_id: str) -> dict:

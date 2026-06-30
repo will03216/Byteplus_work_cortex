@@ -1955,6 +1955,69 @@ async def api_remove_instantly_campaign(request: Request, row_id: int):
     return JSONResponse({"ok": True})
 
 
+# ── Meeting-note → pain point ─────────────────────────────────────────────────
+
+_PAIN_POINT_SYSTEM = (
+    "You are a B2B sales analyst. From a meeting note or call transcript, identify "
+    "the single most critical pain point the prospect's segment cares about. "
+    "Return ONE concise, specific sentence (max ~30 words) suitable as the opening "
+    "line of a cold outreach email. Do not greet, do not add quotes, do not add a "
+    "preamble — return only the sentence."
+)
+
+
+async def _extract_pain_point(note_text: str) -> str:
+    """Run one LLM call to distill a meeting note into a single opening-line pain point."""
+    note_text = (note_text or "").strip()
+    if not note_text:
+        return ""
+    if not config.LLM_API_KEY or not config.LLM_MODEL:
+        raise RuntimeError("LLM not configured (set LLM_API_KEY and LLM_MODEL)")
+    client = LiteLLMClient(
+        model=config.LLM_MODEL,
+        api_key=config.LLM_API_KEY,
+        provider=config.LLM_PROVIDER,
+        api_base=config.LLM_API_BASE,
+        timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+        thinking_budget=config.LLM_THINKING_BUDGET,
+    )
+    text = await client.generate(
+        system_prompt=_PAIN_POINT_SYSTEM,
+        messages=[{"role": "user", "content": f"Meeting note:\n\n{note_text}"}],
+        max_tokens=400,
+    )
+    # Collapse to a single clean line
+    return " ".join((text or "").strip().split())
+
+
+@app.post("/api/instantly/campaigns/{campaign_id}/extract-pain-point")
+async def api_extract_pain_point(request: Request, campaign_id: str):
+    """Extract a pain point from a note (preview only — does not save)."""
+    _require_auth(request)
+    body = await request.json()
+    note = (body.get("note") or "").strip()
+    if not note:
+        return JSONResponse({"error": "note text is required"}, status_code=400)
+    try:
+        pain_point = await _extract_pain_point(note)
+    except Exception as exc:
+        return JSONResponse({"error": f"Extraction failed: {exc}"}, status_code=502)
+    return JSONResponse({"pain_point": pain_point})
+
+
+@app.put("/api/instantly/campaigns/{campaign_id}/note")
+async def api_save_campaign_note(request: Request, campaign_id: str):
+    """Persist a campaign's meeting note + (edited) pain point."""
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse({"error": "Database required"}, status_code=400)
+    body = await request.json()
+    meeting_note = (body.get("meeting_note") or "").strip()
+    pain_point = (body.get("pain_point") or "").strip()
+    await store.set_campaign_note(_pool, campaign_id, meeting_note, pain_point)
+    return JSONResponse({"ok": True, "pain_point": pain_point})
+
+
 @app.get("/api/instantly/routing")
 async def api_get_routing(request: Request):
     _require_auth(request)
