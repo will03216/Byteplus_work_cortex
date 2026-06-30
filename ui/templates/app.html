@@ -355,6 +355,17 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .manual-email-badge.sent     { background:rgba(74,222,128,0.12); color:var(--green); border:1px solid rgba(74,222,128,0.25); }
 .manual-email-badge.not_sent { background:rgba(248,113,113,0.10); color:var(--red);   border:1px solid rgba(248,113,113,0.25); }
 .email-edit-row { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:10px 12px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; }
+.ic-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+.ic-card-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.ic-note-toggle { display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:12px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; user-select:none; }
+.ic-note-toggle:hover { color:var(--text2); }
+.ic-pain-set { color:var(--green); font-size:11px; }
+.ic-note-body { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
+.ic-note-ta { width:100%; min-height:90px; resize:vertical; background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:9px 11px; color:var(--text1); font-size:13px; font-family:inherit; }
+.ic-pain-in { width:100%; min-height:48px; resize:vertical; background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:9px 11px; color:var(--text1); font-size:13px; font-family:inherit; }
+.ic-note-ta:focus, .ic-pain-in:focus { outline:none; border-color:var(--blue); }
+.ic-note-actions { display:flex; align-items:center; gap:10px; }
+.ic-note-status { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
 .routing-summary { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
 .routing-summary-header { display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; user-select:none; }
 .routing-summary-header:hover .routing-summary-title { color:var(--text2); }
@@ -1909,6 +1920,8 @@ async function loadRouting() {
   renderRoutingTable();
 }
 
+let _expandedNotes = new Set();
+
 function renderSavedCampaigns() {
   const el = document.getElementById('ic-list');
   if (!el) return;
@@ -1916,17 +1929,78 @@ function renderSavedCampaigns() {
     el.innerHTML = '<div class="exclusion-empty">No campaigns saved yet.</div>';
     return;
   }
-  el.innerHTML = _savedCampaigns.map(c => `
-    <div class="exclusion-item">
-      <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
-        <span style="font-weight:600">${c.label}</span>
-        <span style="font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">${c.campaign_id}</span>
+  const esc = s => (s || '').replace(/</g, '&lt;');
+  el.innerHTML = _savedCampaigns.map(c => {
+    const expanded = _expandedNotes.has(c.id);
+    const hasPain = (c.pain_point || '').trim().length > 0;
+    return `
+    <div class="ic-card">
+      <div class="ic-card-head">
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+          <span style="font-weight:600">${c.label}</span>
+          <span style="font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">${c.campaign_id}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${c.exists ? _campaignStatusLabel(c.live_status) : '<span class="apollo-status off">not found</span>'}
+          <button class="copy-btn" onclick="removeInstantlyCampaign(${c.id})">Remove</button>
+        </div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        ${c.exists ? _campaignStatusLabel(c.live_status) : '<span class="apollo-status off">not found</span>'}
-        <button class="copy-btn" onclick="removeInstantlyCampaign(${c.id})">Remove</button>
+      <div class="ic-note-toggle" onclick="toggleCampaignNote(${c.id})">
+        <span>${expanded ? '▼' : '▶'}&nbsp; Meeting note → pain point</span>
+        ${hasPain ? '<span class="ic-pain-set">✓ pain point set</span>' : ''}
       </div>
-    </div>`).join('');
+      ${expanded ? `
+      <div class="ic-note-body">
+        <label class="tmpl-form-label">Meeting note / AI transcript (pasted text)</label>
+        <textarea class="ic-note-ta" id="note-ta-${c.id}" placeholder="Paste the meeting note or call transcript here…">${esc(c.meeting_note)}</textarea>
+        <div class="ic-note-actions">
+          <button class="settings-save-btn" onclick="extractPainPoint('${c.campaign_id}', ${c.id})">Extract pain point with Cortex</button>
+        </div>
+        <label class="tmpl-form-label">Pain point — used as <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{{pain_point}}</code> in the Instantly sequence (editable)</label>
+        <textarea class="ic-pain-in" id="pain-in-${c.id}" placeholder="One concise opening sentence…">${esc(c.pain_point)}</textarea>
+        <div class="ic-note-actions">
+          <button class="settings-save-btn" onclick="saveCampaignNote('${c.campaign_id}', ${c.id})">Save</button>
+          <span class="ic-note-status" id="note-status-${c.id}"></span>
+        </div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function toggleCampaignNote(id) {
+  if (_expandedNotes.has(id)) _expandedNotes.delete(id); else _expandedNotes.add(id);
+  renderSavedCampaigns();
+}
+
+async function extractPainPoint(campaignId, rowId) {
+  const note = (document.getElementById('note-ta-' + rowId).value || '').trim();
+  const statusEl = document.getElementById('note-status-' + rowId);
+  if (!note) { alert('Paste a meeting note first.'); return; }
+  if (statusEl) statusEl.textContent = 'Extracting…';
+  try {
+    const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/extract-pain-point`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note}),
+    });
+    const data = await res.json();
+    if (!res.ok) { if (statusEl) statusEl.textContent = data.error || 'Extraction failed'; return; }
+    document.getElementById('pain-in-' + rowId).value = data.pain_point || '';
+    if (statusEl) statusEl.textContent = 'Extracted — review, then Save.';
+  } catch (e) { if (statusEl) statusEl.textContent = 'Extraction failed.'; }
+}
+
+async function saveCampaignNote(campaignId, rowId) {
+  const meeting_note = (document.getElementById('note-ta-' + rowId).value || '').trim();
+  const pain_point   = (document.getElementById('pain-in-' + rowId).value || '').trim();
+  const statusEl = document.getElementById('note-status-' + rowId);
+  if (statusEl) statusEl.textContent = 'Saving…';
+  const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/note`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({meeting_note, pain_point}),
+  });
+  if (!res.ok) { if (statusEl) statusEl.textContent = 'Save failed'; return; }
+  const c = _savedCampaigns.find(x => x.id === rowId);
+  if (c) { c.meeting_note = meeting_note; c.pain_point = pain_point; }
+  if (statusEl) statusEl.textContent = '✓ Saved';
 }
 
 function renderRoutingTable() {
