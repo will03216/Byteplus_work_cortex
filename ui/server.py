@@ -626,6 +626,15 @@ async def _send_to_instantly(leads: list, campaign_id: str = "") -> list:
     sent_ids = []
     instantly_id_map: dict[str, str] = {}
 
+    # This campaign's meeting-note pain point → forwarded as {{pain_point}}.
+    # Empty string when unset so the placeholder always resolves (never breaks a send).
+    pain_point = ""
+    if _pool:
+        try:
+            pain_point = (await store.get_campaign_pain_points(_pool)).get(campaign_id, "")
+        except Exception as exc:
+            logger.warning("Could not load pain point for campaign %s: %s", campaign_id, exc)
+
     async with httpx.AsyncClient(
         timeout=30,
         verify=ssl_verify,
@@ -663,9 +672,13 @@ async def _send_to_instantly(leads: list, campaign_id: str = "") -> list:
                 "company_name":    lead.get("company") or "",
                 "website":         lead.get("company_website") or "",
                 "personalization": built["body"],
-                # Cortex-rendered per-vertical subject — forwarded as a custom
-                # variable, referenced as {{email_subject}} in the Instantly sequence.
-                "custom_variables": {"email_subject": built["subject"]},
+                # Custom variables referenced in the Instantly sequence:
+                #   {{email_subject}} — Cortex per-vertical subject
+                #   {{pain_point}}    — campaign meeting-note pain point (empty if unset)
+                "custom_variables": {
+                    "email_subject": built["subject"],
+                    "pain_point":    pain_point,
+                },
                 "campaign":        campaign_id,
             }
             resp = await _instantly_call(client, "POST",
