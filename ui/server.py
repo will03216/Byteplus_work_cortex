@@ -1971,16 +1971,33 @@ async def api_remove_instantly_campaign(request: Request, row_id: int):
 # ── Meeting-note → pain point ─────────────────────────────────────────────────
 
 _PAIN_POINT_SYSTEM = (
-    "You are a B2B sales analyst. From a meeting note or call transcript, identify "
-    "the single most critical pain point the prospect's segment cares about. "
-    "Return ONE concise, specific sentence (max ~30 words) suitable as the opening "
-    "line of a cold outreach email. Do not greet, do not add quotes, do not add a "
-    "preamble — return only the sentence."
+    "You are writing the FIRST line of a warm, personalized cold email to a\n"
+    "prospect we just met. From the meeting note below, extract the single most\n"
+    "critical, specific pain point and write it as ONE sentence that can be\n"
+    "dropped directly into the email as the opening line.\n"
+    "Rules:\n"
+    "- Write in SECOND person (\"you\" / \"your\"), addressing the prospect directly.\n"
+    "- Anchor it to ONE concrete detail from the meeting — a number, a timeframe,\n"
+    "  a named workflow, or a specific constraint they mentioned (e.g. \"40% of\n"
+    "  your budget on VFX\", \"12–18 month production cycles\"). Do NOT generalize\n"
+    "  into abstract phrases like \"cost and time savings\".\n"
+    "- Frame it empathetically — show we understand their problem and are here to\n"
+    "  solve it, not just describe it. It should make them nod \"yes, exactly\".\n"
+    "- Keep it natural and conversational, the way one human opens an email to\n"
+    "  another. No jargon, no \"Media production studios face…\" third-person\n"
+    "  summaries.\n"
+    "- One sentence only. No greeting, no preamble, no quotes. Return only the\n"
+    "  sentence.\n\n"
+    "Example of the desired style (note the second person, the concrete 40% detail,\n"
+    "and the empathetic, conversational tone):\n"
+    "You mentioned VFX still eats nearly 40% of your production budget — that's\n"
+    "exactly the line item where this pays for itself fastest."
 )
 
 
-async def _extract_pain_point(note_text: str) -> str:
-    """Run one LLM call to distill a meeting note into a single opening-line pain point."""
+async def _extract_pain_point(note_text: str, avoid: str = "") -> str:
+    """Run one LLM call to distill a meeting note into a single opening-line pain point.
+    If `avoid` is given, the model is told to pick a DIFFERENT angle than that text."""
     note_text = (note_text or "").strip()
     if not note_text:
         return ""
@@ -1994,9 +2011,16 @@ async def _extract_pain_point(note_text: str) -> str:
         timeout_seconds=config.LLM_TIMEOUT_SECONDS,
         thinking_budget=config.LLM_THINKING_BUDGET,
     )
+    user_content = f"Meeting note:\n\n{note_text}"
+    if avoid.strip():
+        user_content += (
+            f"\n\nThe meeting has more than one strong pain point. Choose a DIFFERENT "
+            f"angle than this previous opening line (do not restate the same idea):\n"
+            f"\"{avoid.strip()}\""
+        )
     text = await client.generate(
         system_prompt=_PAIN_POINT_SYSTEM,
-        messages=[{"role": "user", "content": f"Meeting note:\n\n{note_text}"}],
+        messages=[{"role": "user", "content": user_content}],
         max_tokens=400,
     )
     # Collapse to a single clean line
@@ -2005,14 +2029,16 @@ async def _extract_pain_point(note_text: str) -> str:
 
 @app.post("/api/instantly/campaigns/{campaign_id}/extract-pain-point")
 async def api_extract_pain_point(request: Request, campaign_id: str):
-    """Extract a pain point from a note (preview only — does not save)."""
+    """Extract a pain point from a note (preview only — does not save).
+    Optional `avoid` re-extracts from a different angle."""
     _require_auth(request)
     body = await request.json()
     note = (body.get("note") or "").strip()
+    avoid = (body.get("avoid") or "").strip()
     if not note:
         return JSONResponse({"error": "note text is required"}, status_code=400)
     try:
-        pain_point = await _extract_pain_point(note)
+        pain_point = await _extract_pain_point(note, avoid=avoid)
     except Exception as exc:
         return JSONResponse({"error": f"Extraction failed: {exc}"}, status_code=502)
     return JSONResponse({"pain_point": pain_point})

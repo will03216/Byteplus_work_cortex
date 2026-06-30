@@ -1954,7 +1954,8 @@ function renderSavedCampaigns() {
         <label class="tmpl-form-label">Meeting note / AI transcript (pasted text)</label>
         <textarea class="ic-note-ta" id="note-ta-${c.id}" placeholder="Paste the meeting note or call transcript here…">${esc(c.meeting_note)}</textarea>
         <div class="ic-note-actions">
-          <button class="settings-save-btn" onclick="extractPainPoint('${c.campaign_id}', ${c.id})">Extract pain point with Cortex</button>
+          <button class="settings-save-btn" onclick="extractPainPoint('${c.campaign_id}', ${c.id}, false)">Extract pain point with Cortex</button>
+          <button class="settings-save-btn" style="background:var(--bg3);color:var(--text2)" onclick="extractPainPoint('${c.campaign_id}', ${c.id}, true)" title="Re-extract a different pain point from the same note">↻ Regenerate (different angle)</button>
         </div>
         <label class="tmpl-form-label">Pain point — used as <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{{pain_point}}</code> in the Instantly sequence (editable)</label>
         <textarea class="ic-pain-in" id="pain-in-${c.id}" placeholder="One concise opening sentence…">${esc(c.pain_point)}</textarea>
@@ -1972,14 +1973,16 @@ function toggleCampaignNote(id) {
   renderSavedCampaigns();
 }
 
-async function extractPainPoint(campaignId, rowId) {
+async function extractPainPoint(campaignId, rowId, regenerate) {
   const note = (document.getElementById('note-ta-' + rowId).value || '').trim();
   const statusEl = document.getElementById('note-status-' + rowId);
   if (!note) { alert('Paste a meeting note first.'); return; }
-  if (statusEl) statusEl.textContent = 'Extracting…';
+  // On regenerate, tell the model to avoid the current pain point (a different angle)
+  const avoid = regenerate ? (document.getElementById('pain-in-' + rowId).value || '').trim() : '';
+  if (statusEl) statusEl.textContent = regenerate ? 'Finding a different angle…' : 'Extracting…';
   try {
     const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/extract-pain-point`, {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note}),
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note, avoid}),
     });
     const data = await res.json();
     if (!res.ok) { if (statusEl) statusEl.textContent = data.error || 'Extraction failed'; return; }
