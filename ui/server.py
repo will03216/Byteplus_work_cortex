@@ -1952,10 +1952,12 @@ async def api_list_instantly_campaigns(request: Request):
         return JSONResponse([])
     rows = await store.list_instantly_campaigns(_pool)
     # Annotate each with live Instantly status (active/paused/etc.)
+    note_counts = await store.count_campaign_notes(_pool)
     for row in rows:
         info = await _validate_instantly_campaign_status(row["campaign_id"])
         row["live_status"] = info.get("status")
         row["exists"] = info.get("exists", False)
+        row["note_count"] = note_counts.get(row["campaign_id"], 0)
     return JSONResponse(rows)
 
 
@@ -1989,50 +1991,69 @@ async def api_remove_instantly_campaign(request: Request, row_id: int):
 
 # ── Meeting-note → pain point ─────────────────────────────────────────────────
 
-_PAIN_POINT_SYSTEM = (
-    "You are writing the FIRST line of a warm, personalized cold email to a\n"
-    "prospect we just met. From the meeting note below, extract the single most\n"
-    "critical, specific pain point and write it as ONE sentence that can be\n"
-    "dropped directly into the email as the opening line.\n"
-    "Rules:\n"
+# Shared style rules for a single opening-line pain point (reused by the
+# single-note extractor and the multi-note synthesizer so both sound identical).
+_PAIN_POINT_STYLE = (
     "- Write in SECOND person (\"you\" / \"your\"), addressing the prospect directly.\n"
-    "- Anchor it to ONE concrete detail from the meeting — a number, a timeframe,\n"
-    "  a named workflow, or a specific constraint they mentioned (e.g. \"40% of\n"
-    "  your budget on VFX\", \"12–18 month production cycles\"). Do NOT generalize\n"
-    "  into abstract phrases like \"cost and time savings\".\n"
-    "- Prefer a concrete, tangible angle over an abstract one whenever the note\n"
-    "  offers it.\n"
+    "- Anchor it to ONE concrete detail — a number, a timeframe, a named workflow,\n"
+    "  or a specific constraint they mentioned (e.g. \"40% of your budget on VFX\",\n"
+    "  \"12–18 month production cycles\"). Do NOT generalize into abstract phrases\n"
+    "  like \"cost and time savings\".\n"
+    "- Prefer a concrete, tangible angle over an abstract one whenever possible.\n"
     "- Frame it empathetically — show we understand their problem. It should make\n"
     "  them nod \"yes, exactly\".\n"
-    "- The sentence should ONLY surface and empathize with the pain — do NOT pitch\n"
-    "  our product or claim we solve it. Stop at the problem. The NEXT line of the\n"
-    "  email handles the pitch, so don't end with \"that's exactly what we built to\n"
-    "  solve\" or any self-promotional tail.\n"
+    "- ONLY surface and empathize with the pain — do NOT pitch our product or claim\n"
+    "  we solve it. Stop at the problem. The NEXT line of the email handles the\n"
+    "  pitch, so don't end with \"that's exactly what we built to solve\" or any\n"
+    "  self-promotional tail.\n"
     "- Vary the sentence structure and ending. Do not use a fixed template. Avoid\n"
-    "  always opening with \"You mentioned…\" or closing with the same construction —\n"
-    "  make each one read like a fresh, human opening line.\n"
-    "- The sentence must stand alone as the FIRST line. Don't open with connectors\n"
+    "  always opening with \"You mentioned…\" or closing the same way — make each one\n"
+    "  read like a fresh, human opening line.\n"
+    "- Each sentence must stand alone as a FIRST line. Don't open with connectors\n"
     "  OR demonstratives that imply prior context — no \"On top of…\", \"Besides…\",\n"
     "  \"Also…\", and no \"That…\", \"This…\", \"These…\". Start with something that makes\n"
     "  sense cold.\n"
     "- Keep it to ONE clean, easy-to-parse sentence the reader can take in a single\n"
     "  breath (aim for roughly 25 words or fewer). Don't separate the subject from\n"
-    "  its verb with a long clause; if the idea is complex, simplify rather than\n"
-    "  stacking sub-clauses.\n"
-    "- Stay concise, but keep ONE empathetic beat that conveys why this hurts —\n"
-    "  not just a bare statistic. Use vivid, human phrasing over clinical\n"
-    "  fact-stating.\n"
-    "- Keep it natural and conversational, the way one human opens an email to\n"
-    "  another. No jargon, no \"Media production studios face…\" third-person\n"
-    "  summaries.\n"
-    "- One sentence only. No greeting, no preamble, no quotes. Return only the\n"
-    "  sentence.\n\n"
+    "  its verb with a long clause; simplify rather than stacking sub-clauses.\n"
+    "- Stay concise, but keep ONE empathetic beat that conveys why this hurts — not\n"
+    "  just a bare statistic. Use vivid, human phrasing over clinical fact-stating.\n"
+    "- Natural and conversational. No jargon, no \"Media production studios face…\"\n"
+    "  third-person summaries."
+)
+
+_PAIN_POINT_EXAMPLES = (
     "Good output examples (surface the pain empathetically and STOP — no pitch;\n"
     "note the varied structure):\n"
     "- \"You mentioned VFX still eats nearly 40% of your production budget — on the\n"
     "  one line item where the math should be easiest to win.\"\n"
     "- \"With production timelines running 12 to 18 months, what you greenlight today\n"
     "  often doesn't deliver revenue until the next fiscal year.\""
+)
+
+_PAIN_POINT_SYSTEM = (
+    "You are writing the FIRST line of a warm, personalized cold email to a\n"
+    "prospect we just met. From the meeting note below, extract the single most\n"
+    "critical, specific pain point and write it as ONE sentence that can be\n"
+    "dropped directly into the email as the opening line.\n"
+    "Rules:\n" + _PAIN_POINT_STYLE + "\n"
+    "- One sentence only. No greeting, no preamble, no quotes. Return only the\n"
+    "  sentence.\n\n" + _PAIN_POINT_EXAMPLES
+)
+
+_SYNTH_SYSTEM = (
+    "You are given several candidate opening-line pain points, each distilled from a\n"
+    "DIFFERENT sales meeting with prospects in the SAME market segment. Your job:\n"
+    "1. Cluster them into distinct pain themes — merge candidates that express the\n"
+    "   same underlying problem, even if worded differently.\n"
+    "2. Count how many of the meetings raised each theme.\n"
+    "3. For the top 3 themes by count, write ONE fresh opening-line pain point that\n"
+    "   best captures that theme, following EXACTLY these style rules:\n"
+    + _PAIN_POINT_STYLE + "\n\n"
+    "Return ONLY a valid JSON array, sorted by count descending, of the form:\n"
+    "[{\"theme\": \"<3-5 word label>\", \"count\": <int>, \"pain_point\": \"<one sentence>\"}]\n"
+    "No prose, no markdown fences — just the JSON array.\n\n"
+    + _PAIN_POINT_EXAMPLES
 )
 
 
@@ -2068,6 +2089,72 @@ async def _extract_pain_point(note_text: str, avoid: str = "") -> str:
     return " ".join((text or "").strip().split())
 
 
+def _parse_json_array(text: str) -> list:
+    """Extract the first JSON array from an LLM response (tolerates fences/prose)."""
+    raw = (text or "").strip()
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not match:
+        return []
+    try:
+        value = json.loads(match.group(0))
+        return value if isinstance(value, list) else []
+    except Exception:
+        return []
+
+
+async def _synthesize_pain_points(notes: list) -> list:
+    """Map-reduce a batch of meeting notes into ranked candidate pain points.
+    Map: one candidate per note (parallel). Reduce: cluster + rank by frequency.
+    Returns [{theme, count, pain_point}] sorted by count desc (top 3)."""
+    notes = [n for n in (notes or []) if (n or "").strip()]
+    if not notes:
+        return []
+    if not config.LLM_API_KEY or not config.LLM_MODEL:
+        raise RuntimeError("LLM not configured (set LLM_API_KEY and LLM_MODEL)")
+
+    # Map: distill each note to a candidate pain point (parallel)
+    results = await asyncio.gather(
+        *[_extract_pain_point(n) for n in notes], return_exceptions=True)
+    candidates = [c for c in results if isinstance(c, str) and c.strip()]
+    if not candidates:
+        return []
+    # A single note needs no clustering — return its candidate directly
+    if len(candidates) == 1:
+        return [{"theme": "", "count": 1, "pain_point": candidates[0]}]
+
+    # Reduce: cluster themes, rank by frequency, write one line per top theme
+    client = LiteLLMClient(
+        model=config.LLM_MODEL, api_key=config.LLM_API_KEY,
+        provider=config.LLM_PROVIDER, api_base=config.LLM_API_BASE,
+        timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+        thinking_budget=config.LLM_THINKING_BUDGET,
+    )
+    listed = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(candidates))
+    text = await client.generate(
+        system_prompt=_SYNTH_SYSTEM,
+        messages=[{"role": "user",
+                   "content": f"Candidate pain points from {len(candidates)} meetings:\n\n{listed}"}],
+        max_tokens=1200,
+    )
+    out = []
+    for item in _parse_json_array(text):
+        if not isinstance(item, dict):
+            continue
+        pp = " ".join(str(item.get("pain_point", "")).split())
+        if not pp:
+            continue
+        try:
+            cnt = int(item.get("count", 0))
+        except (TypeError, ValueError):
+            cnt = 0
+        out.append({"theme": str(item.get("theme", "")).strip()[:60],
+                    "count": cnt, "pain_point": pp})
+    # Fallback: if the reduce output couldn't be parsed, surface raw candidates
+    if not out:
+        out = [{"theme": "", "count": 1, "pain_point": c} for c in candidates[:3]]
+    return out[:3]
+
+
 @app.post("/api/instantly/campaigns/{campaign_id}/extract-pain-point")
 async def api_extract_pain_point(request: Request, campaign_id: str):
     """Extract a pain point from a note (preview only — does not save).
@@ -2087,7 +2174,7 @@ async def api_extract_pain_point(request: Request, campaign_id: str):
 
 @app.put("/api/instantly/campaigns/{campaign_id}/note")
 async def api_save_campaign_note(request: Request, campaign_id: str):
-    """Persist a campaign's meeting note + (edited) pain point."""
+    """Persist a campaign's chosen pain point (and legacy single meeting_note)."""
     _require_auth(request)
     if not _pool:
         return JSONResponse({"error": "Database required"}, status_code=400)
@@ -2096,6 +2183,54 @@ async def api_save_campaign_note(request: Request, campaign_id: str):
     pain_point = (body.get("pain_point") or "").strip()
     await store.set_campaign_note(_pool, campaign_id, meeting_note, pain_point)
     return JSONResponse({"ok": True, "pain_point": pain_point})
+
+
+# ── Multi-note batches per campaign ───────────────────────────────────────────
+
+@app.get("/api/instantly/campaigns/{campaign_id}/notes")
+async def api_list_campaign_notes(request: Request, campaign_id: str):
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse([])
+    return JSONResponse(await store.list_campaign_notes(_pool, campaign_id))
+
+
+@app.post("/api/instantly/campaigns/{campaign_id}/notes")
+async def api_add_campaign_note(request: Request, campaign_id: str):
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse({"error": "Database required"}, status_code=400)
+    body = await request.json()
+    note = (body.get("note") or "").strip()
+    if not note:
+        return JSONResponse({"error": "note text is required"}, status_code=400)
+    row = await store.add_campaign_note(_pool, campaign_id, note)
+    return JSONResponse(row)
+
+
+@app.delete("/api/instantly/campaigns/{campaign_id}/notes/{note_id}")
+async def api_delete_campaign_note(request: Request, campaign_id: str, note_id: int):
+    _require_auth(request)
+    if _pool:
+        await store.delete_campaign_note(_pool, note_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/instantly/campaigns/{campaign_id}/synthesize")
+async def api_synthesize_pain_points(request: Request, campaign_id: str):
+    """Synthesize ranked candidate pain points from the campaign's note batch."""
+    _require_auth(request)
+    if not _pool:
+        return JSONResponse({"error": "Database required"}, status_code=400)
+    notes = await store.get_campaign_note_texts(_pool, campaign_id)
+    if not notes:
+        return JSONResponse({"error": "No notes to synthesize — add at least one note first"},
+                            status_code=400)
+    try:
+        candidates = await _synthesize_pain_points(notes)
+    except Exception as exc:
+        return JSONResponse({"error": f"Synthesis failed: {exc}"}, status_code=502)
+    return JSONResponse({"candidates": candidates, "total": len(notes)})
 
 
 @app.get("/api/instantly/routing")
