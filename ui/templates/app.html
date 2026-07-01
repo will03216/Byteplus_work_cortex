@@ -364,8 +364,19 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .ic-note-ta { width:100%; min-height:90px; resize:vertical; background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:9px 11px; color:var(--text1); font-size:13px; font-family:inherit; }
 .ic-pain-in { width:100%; min-height:48px; resize:vertical; background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:9px 11px; color:var(--text1); font-size:13px; font-family:inherit; }
 .ic-note-ta:focus, .ic-pain-in:focus { outline:none; border-color:var(--blue); }
-.ic-note-actions { display:flex; align-items:center; gap:10px; }
+.ic-note-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .ic-note-status { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; }
+.ic-note-count { color:var(--text3); font-size:11px; }
+.ic-notes-list { display:flex; flex-direction:column; gap:6px; }
+.ic-note-item { display:flex; align-items:flex-start; gap:8px; padding:7px 9px; background:var(--bg3); border:1px solid var(--border); border-radius:8px; font-size:12px; }
+.ic-note-num { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:10px; margin-top:1px; }
+.ic-note-text { flex:1; color:var(--text2); line-height:1.4; min-width:0; }
+.ic-candidates { display:flex; flex-direction:column; gap:8px; }
+.ic-candidate { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }
+.ic-candidate-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.ic-candidate-theme { font-weight:600; font-size:12px; color:var(--text1); }
+.ic-candidate-count { font-size:10px; color:var(--blue); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; background:rgba(96,165,250,0.12); padding:1px 7px; border-radius:4px; white-space:nowrap; }
+.ic-candidate-text { font-size:13px; color:var(--text2); line-height:1.45; }
 .routing-summary { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
 .routing-summary-header { display:flex; justify-content:space-between; align-items:center; cursor:pointer; margin-bottom:10px; user-select:none; }
 .routing-summary-header:hover .routing-summary-title { color:var(--text2); }
@@ -1949,21 +1960,24 @@ function renderSavedCampaigns() {
         </div>
       </div>
       <div class="ic-note-toggle" onclick="toggleCampaignNote(${c.id})">
-        <span>${expanded ? '▼' : '▶'}&nbsp; Meeting note → pain point</span>
+        <span>${expanded ? '▼' : '▶'}&nbsp; Meeting notes → pain point${c.note_count ? ' <span class="ic-note-count">(' + c.note_count + ')</span>' : ''}</span>
         ${hasPain ? '<span class="ic-pain-set">✓ pain point set</span>' : ''}
       </div>
       ${expanded ? `
       <div class="ic-note-body">
-        <label class="tmpl-form-label">Meeting note / AI transcript (pasted text)</label>
-        <textarea class="ic-note-ta" id="note-ta-${c.id}" placeholder="Paste the meeting note or call transcript here…">${esc(c.meeting_note)}</textarea>
+        <label class="tmpl-form-label">Meeting notes — paste one per meeting; they accumulate over time</label>
+        <div class="ic-notes-list" id="notes-list-${c.id}"><span class="ic-note-status">Loading notes…</span></div>
+        <textarea class="ic-note-ta" id="note-add-${c.id}" placeholder="Paste a meeting note / AI transcript, then Add note…"></textarea>
         <div class="ic-note-actions">
-          <button class="settings-save-btn" onclick="extractPainPoint('${c.campaign_id}', ${c.id}, false)">Extract pain point with Cortex</button>
-          <button class="settings-save-btn" style="background:var(--bg3);color:var(--text2)" onclick="extractPainPoint('${c.campaign_id}', ${c.id}, true)" title="Re-extract a different pain point from the same note">↻ Regenerate (different angle)</button>
+          <button class="settings-save-btn" onclick="addCampaignNote('${c.campaign_id}', ${c.id})">+ Add note</button>
+          <button class="settings-save-btn" style="background:var(--blue);color:#fff" onclick="synthesizePainPoints('${c.campaign_id}', ${c.id})">Synthesize pain points</button>
+          <span class="ic-note-status" id="synth-status-${c.id}"></span>
         </div>
-        <label class="tmpl-form-label">Pain point — used as <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{{pain_point}}</code> in the Instantly sequence (editable)</label>
+        <div class="ic-candidates" id="candidates-${c.id}"></div>
+        <label class="tmpl-form-label">Pain point — used as <code style="font-size:10px;background:var(--bg3);padding:1px 4px;border-radius:3px;">{{pain_point}}</code> in the Instantly sequence (pick a candidate above or edit here)</label>
         <textarea class="ic-pain-in" id="pain-in-${c.id}" placeholder="One concise opening sentence…">${esc(c.pain_point)}</textarea>
         <div class="ic-note-actions">
-          <button class="settings-save-btn" onclick="saveCampaignNote('${c.campaign_id}', ${c.id})">Save</button>
+          <button class="settings-save-btn" onclick="saveCampaignNote('${c.campaign_id}', ${c.id})">Save pain point</button>
           <span class="ic-note-status" id="note-status-${c.id}"></span>
         </div>
       </div>` : ''}
@@ -1974,38 +1988,95 @@ function renderSavedCampaigns() {
 function toggleCampaignNote(id) {
   if (_expandedNotes.has(id)) _expandedNotes.delete(id); else _expandedNotes.add(id);
   renderSavedCampaigns();
+  if (_expandedNotes.has(id)) {
+    const c = _savedCampaigns.find(x => x.id === id);
+    if (c) loadCampaignNotes(c.campaign_id, id);
+  }
 }
 
-async function extractPainPoint(campaignId, rowId, regenerate) {
-  const note = (document.getElementById('note-ta-' + rowId).value || '').trim();
-  const statusEl = document.getElementById('note-status-' + rowId);
-  if (!note) { alert('Paste a meeting note first.'); return; }
-  // On regenerate, tell the model to avoid the current pain point (a different angle)
-  const avoid = regenerate ? (document.getElementById('pain-in-' + rowId).value || '').trim() : '';
-  if (statusEl) statusEl.textContent = regenerate ? 'Finding a different angle…' : 'Extracting…';
+const _esc = s => (s || '').replace(/</g, '&lt;');
+
+async function loadCampaignNotes(campaignId, rowId) {
+  const el = document.getElementById('notes-list-' + rowId);
+  if (!el) return;
   try {
-    const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/extract-pain-point`, {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note, avoid}),
-    });
+    const notes = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/notes`).then(r => r.json());
+    if (!Array.isArray(notes) || !notes.length) {
+      el.innerHTML = '<span class="ic-note-status">No notes yet — paste your first meeting note below.</span>';
+      return;
+    }
+    el.innerHTML = notes.map((n, i) => `
+      <div class="ic-note-item">
+        <span class="ic-note-num">${i + 1}</span>
+        <span class="ic-note-text">${_esc(n.note_text).slice(0, 240)}${(n.note_text || '').length > 240 ? '…' : ''}</span>
+        <button class="copy-btn" onclick="removeCampaignNote('${campaignId}', ${rowId}, ${n.id})">✕</button>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<span class="ic-note-status">Failed to load notes.</span>';
+  }
+}
+
+async function addCampaignNote(campaignId, rowId) {
+  const ta = document.getElementById('note-add-' + rowId);
+  const note = (ta.value || '').trim();
+  if (!note) { alert('Paste a meeting note first.'); return; }
+  const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/notes`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note}),
+  });
+  if (!res.ok) { alert('Failed to add note.'); return; }
+  ta.value = '';
+  const c = _savedCampaigns.find(x => x.id === rowId);
+  if (c) c.note_count = (c.note_count || 0) + 1;
+  await loadCampaignNotes(campaignId, rowId);
+}
+
+async function removeCampaignNote(campaignId, rowId, noteId) {
+  await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/notes/${noteId}`, { method: 'DELETE' });
+  const c = _savedCampaigns.find(x => x.id === rowId);
+  if (c) c.note_count = Math.max(0, (c.note_count || 1) - 1);
+  await loadCampaignNotes(campaignId, rowId);
+}
+
+async function synthesizePainPoints(campaignId, rowId) {
+  const statusEl = document.getElementById('synth-status-' + rowId);
+  const box = document.getElementById('candidates-' + rowId);
+  if (statusEl) statusEl.textContent = 'Synthesizing across your notes…';
+  if (box) box.innerHTML = '';
+  try {
+    const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/synthesize`, { method: 'POST' });
     const data = await res.json();
-    if (!res.ok) { if (statusEl) statusEl.textContent = data.error || 'Extraction failed'; return; }
-    document.getElementById('pain-in-' + rowId).value = data.pain_point || '';
-    if (statusEl) statusEl.textContent = 'Extracted — review, then Save.';
-  } catch (e) { if (statusEl) statusEl.textContent = 'Extraction failed.'; }
+    if (!res.ok) { if (statusEl) statusEl.textContent = data.error || 'Synthesis failed'; return; }
+    if (statusEl) statusEl.textContent = '';
+    const cands = data.candidates || [];
+    if (!cands.length) { box.innerHTML = '<span class="ic-note-status">No candidates returned.</span>'; return; }
+    box.innerHTML = cands.map(c => `
+      <div class="ic-candidate">
+        <div class="ic-candidate-head">
+          <span class="ic-candidate-theme">${_esc(c.theme) || 'Theme'}</span>
+          <span class="ic-candidate-count">${c.count}/${data.total} meetings</span>
+        </div>
+        <div class="ic-candidate-text">${_esc(c.pain_point)}</div>
+        <button class="settings-save-btn" onclick="useCandidate(${rowId}, ${JSON.stringify(c.pain_point).replace(/"/g,'&quot;')})">Use this</button>
+      </div>`).join('');
+  } catch (e) { if (statusEl) statusEl.textContent = 'Synthesis failed.'; }
+}
+
+function useCandidate(rowId, painPoint) {
+  const el = document.getElementById('pain-in-' + rowId);
+  if (el) { el.value = painPoint; el.focus(); }
 }
 
 async function saveCampaignNote(campaignId, rowId) {
-  const meeting_note = (document.getElementById('note-ta-' + rowId).value || '').trim();
-  const pain_point   = (document.getElementById('pain-in-' + rowId).value || '').trim();
+  const pain_point = (document.getElementById('pain-in-' + rowId).value || '').trim();
   const statusEl = document.getElementById('note-status-' + rowId);
   if (statusEl) statusEl.textContent = 'Saving…';
   const res = await fetch(`/api/instantly/campaigns/${encodeURIComponent(campaignId)}/note`, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({meeting_note, pain_point}),
+    body: JSON.stringify({meeting_note: '', pain_point}),
   });
   if (!res.ok) { if (statusEl) statusEl.textContent = 'Save failed'; return; }
   const c = _savedCampaigns.find(x => x.id === rowId);
-  if (c) { c.meeting_note = meeting_note; c.pain_point = pain_point; }
+  if (c) c.pain_point = pain_point;
   if (statusEl) statusEl.textContent = '✓ Saved';
 }
 
