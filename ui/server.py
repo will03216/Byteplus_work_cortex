@@ -2041,17 +2041,35 @@ _PAIN_POINT_SYSTEM = (
     "  sentence.\n\n" + _PAIN_POINT_EXAMPLES
 )
 
+# Map stage: pull the top 2–3 DISTINCT pains from a single note (not just one),
+# so information-dense meetings contribute all their strong angles to clustering.
+_MULTI_EXTRACT_SYSTEM = (
+    "From the meeting note below, extract the TOP 2–3 DISTINCT pain points — genuinely\n"
+    "different underlying problems, NOT rephrasings of the same one. Write each as ONE\n"
+    "opening-line sentence following EXACTLY these style rules:\n"
+    + _PAIN_POINT_STYLE + "\n\n"
+    "Return ONLY a JSON array of strings, e.g. [\"<sentence 1>\", \"<sentence 2>\"]. If the\n"
+    "note only clearly supports one pain, return one. No prose, no markdown fences."
+)
+
+# Reduce stage: candidates are grouped BY MEETING so we can count distinct meetings.
 _SYNTH_SYSTEM = (
-    "You are given several candidate opening-line pain points, each distilled from a\n"
-    "DIFFERENT sales meeting with prospects in the SAME market segment. Your job:\n"
-    "1. Cluster them into distinct pain themes — merge candidates that express the\n"
-    "   same underlying problem, even if worded differently.\n"
-    "2. Count how many of the meetings raised each theme.\n"
-    "3. For the top 3 themes by count, write ONE fresh opening-line pain point that\n"
-    "   best captures that theme, following EXACTLY these style rules:\n"
+    "You are given candidate opening-line pain points GROUPED BY MEETING — each block\n"
+    "lists the pains raised in ONE sales meeting with a prospect in the SAME market\n"
+    "segment. Your job:\n"
+    "1. Cluster the pains ACROSS all meetings into distinct themes — merge candidates\n"
+    "   (even across meetings, even if worded differently) that express the same\n"
+    "   underlying problem.\n"
+    "2. For each theme, count how many DISTINCT meetings raised it. A meeting counts\n"
+    "   AT MOST ONCE per theme, even if it contributed several candidates to that theme.\n"
+    "3. For the top 3 themes by meeting-count (break ties by severity, then by more\n"
+    "   recent meetings — later-numbered blocks are more recent), write ONE fresh\n"
+    "   opening-line pain point capturing that theme, following EXACTLY these style\n"
+    "   rules:\n"
     + _PAIN_POINT_STYLE + "\n\n"
     "Return ONLY a valid JSON array, sorted by count descending, of the form:\n"
-    "[{\"theme\": \"<3-5 word label>\", \"count\": <int>, \"pain_point\": \"<one sentence>\"}]\n"
+    "[{\"theme\": \"<3-5 word label>\", \"count\": <distinct meeting count>, "
+    "\"pain_point\": \"<one sentence>\"}]\n"
     "No prose, no markdown fences — just the JSON array.\n\n"
     + _PAIN_POINT_EXAMPLES
 )
@@ -2102,39 +2120,76 @@ def _parse_json_array(text: str) -> list:
         return []
 
 
-async def _synthesize_pain_points(notes: list) -> list:
-    """Map-reduce a batch of meeting notes into ranked candidate pain points.
-    Map: one candidate per note (parallel). Reduce: cluster + rank by frequency.
-    Returns [{theme, count, pain_point}] sorted by count desc (top 3)."""
-    notes = [n for n in (notes or []) if (n or "").strip()]
-    if not notes:
+async def _extract_pain_points_multi(note_text: str) -> list:
+    """Map stage: pull the top 2–3 DISTINCT pain points from a single note."""
+    note_text = (note_text or "").strip()
+    if not note_text:
         return []
-    if not config.LLM_API_KEY or not config.LLM_MODEL:
-        raise RuntimeError("LLM not configured (set LLM_API_KEY and LLM_MODEL)")
-
-    # Map: distill each note to a candidate pain point (parallel)
-    results = await asyncio.gather(
-        *[_extract_pain_point(n) for n in notes], return_exceptions=True)
-    candidates = [c for c in results if isinstance(c, str) and c.strip()]
-    if not candidates:
-        return []
-    # A single note needs no clustering — return its candidate directly
-    if len(candidates) == 1:
-        return [{"theme": "", "count": 1, "pain_point": candidates[0]}]
-
-    # Reduce: cluster themes, rank by frequency, write one line per top theme
     client = LiteLLMClient(
         model=config.LLM_MODEL, api_key=config.LLM_API_KEY,
         provider=config.LLM_PROVIDER, api_base=config.LLM_API_BASE,
         timeout_seconds=config.LLM_TIMEOUT_SECONDS,
         thinking_budget=config.LLM_THINKING_BUDGET,
     )
-    listed = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(candidates))
+    text = await client.generate(
+        system_prompt=_MULTI_EXTRACT_SYSTEM,
+        messages=[{"role": "user", "content": f"Meeting note:\n\n{note_text}"}],
+        max_tokens=600,
+    )
+    items = _parse_json_array(text)
+    out = []
+    for it in items:
+        s = " ".join(str(it).split()) if isinstance(it, str) else \
+            " ".join(str(it.get("pain_point", "")).split()) if isinstance(it, dict) else ""
+        if s:
+            out.append(s)
+    # Fallback to the single-candidate extractor if the array came back empty
+    if not out:
+        one = await _extract_pain_point(note_text)
+        if one:
+            out = [one]
+    return out[:3]
+
+
+async def _synthesize_pain_points(notes: list) -> list:
+    """Map-reduce a batch of meeting notes into ranked candidate pain points.
+    Map: TOP 2–3 candidates PER note (parallel). Reduce: cluster across meetings
+    and rank by distinct-meeting frequency. Returns [{theme, count, pain_point}]."""
+    notes = [n for n in (notes or []) if (n or "").strip()]
+    if not notes:
+        return []
+    if not config.LLM_API_KEY or not config.LLM_MODEL:
+        raise RuntimeError("LLM not configured (set LLM_API_KEY and LLM_MODEL)")
+
+    # Map: 2–3 candidates per note, kept grouped by meeting (parallel)
+    results = await asyncio.gather(
+        *[_extract_pain_points_multi(n) for n in notes], return_exceptions=True)
+    per_meeting = [r for r in results if isinstance(r, list) and r]
+    if not per_meeting:
+        return []
+    total = len(per_meeting)
+
+    # A single meeting needs no cross-meeting clustering — return its candidates
+    if total == 1:
+        return [{"theme": "", "count": 1, "pain_point": c} for c in per_meeting[0][:3]]
+
+    # Reduce: cluster across meetings, count distinct meetings per theme
+    client = LiteLLMClient(
+        model=config.LLM_MODEL, api_key=config.LLM_API_KEY,
+        provider=config.LLM_PROVIDER, api_base=config.LLM_API_BASE,
+        timeout_seconds=config.LLM_TIMEOUT_SECONDS,
+        thinking_budget=config.LLM_THINKING_BUDGET,
+    )
+    blocks = []
+    for i, cands in enumerate(per_meeting):
+        lines = "\n".join(f"  - {c}" for c in cands)
+        blocks.append(f"Meeting {i + 1}:\n{lines}")
     text = await client.generate(
         system_prompt=_SYNTH_SYSTEM,
         messages=[{"role": "user",
-                   "content": f"Candidate pain points from {len(candidates)} meetings:\n\n{listed}"}],
-        max_tokens=1200,
+                   "content": f"{total} meetings, candidates grouped by meeting:\n\n"
+                              + "\n\n".join(blocks)}],
+        max_tokens=1400,
     )
     out = []
     for item in _parse_json_array(text):
@@ -2147,11 +2202,13 @@ async def _synthesize_pain_points(notes: list) -> list:
             cnt = int(item.get("count", 0))
         except (TypeError, ValueError):
             cnt = 0
+        cnt = max(1, min(cnt, total))   # clamp to [1, total]
         out.append({"theme": str(item.get("theme", "")).strip()[:60],
                     "count": cnt, "pain_point": pp})
-    # Fallback: if the reduce output couldn't be parsed, surface raw candidates
+    # Fallback: if the reduce output couldn't be parsed, surface first candidates
     if not out:
-        out = [{"theme": "", "count": 1, "pain_point": c} for c in candidates[:3]]
+        flat = [c for cands in per_meeting for c in cands]
+        out = [{"theme": "", "count": 1, "pain_point": c} for c in flat[:3]]
     return out[:3]
 
 
