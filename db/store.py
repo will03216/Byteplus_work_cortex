@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS instantly_routing (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Accumulated meeting notes per campaign (one row per pasted note)
+CREATE TABLE IF NOT EXISTS campaign_notes (
+    id            SERIAL      PRIMARY KEY,
+    campaign_id   TEXT        NOT NULL,
+    note_text     TEXT        NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_notes_campaign ON campaign_notes(campaign_id);
+
 CREATE TABLE IF NOT EXISTS skill_files (
     id          SERIAL      PRIMARY KEY,
     campaign_id TEXT        NOT NULL,
@@ -291,6 +300,16 @@ async def create_tables(pool: asyncpg.Pool) -> None:
             """CREATE TABLE IF NOT EXISTS instantly_routing (
                    vertical TEXT PRIMARY KEY, campaign_id TEXT NOT NULL,
                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
+        )
+        # Accumulated meeting notes per campaign (batch for pain-point synthesis)
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS campaign_notes (
+                   id SERIAL PRIMARY KEY, campaign_id TEXT NOT NULL,
+                   note_text TEXT NOT NULL,
+                   created_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_campaign_notes_campaign ON campaign_notes(campaign_id)"
         )
         # Email status on runs
         await conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS email_status TEXT DEFAULT 'not_sent'")
@@ -1542,6 +1561,53 @@ async def get_campaign_pain_points(pool: asyncpg.Pool) -> dict:
         "SELECT campaign_id, pain_point FROM instantly_campaigns WHERE pain_point <> ''"
     )
     return {r["campaign_id"]: r["pain_point"] for r in rows}
+
+
+# ── Campaign meeting notes (batch for synthesis) ──────────────────────────────
+
+async def add_campaign_note(pool: asyncpg.Pool, campaign_id: str, note_text: str) -> dict:
+    row = await pool.fetchrow(
+        """INSERT INTO campaign_notes(campaign_id, note_text) VALUES($1, $2)
+           RETURNING id, campaign_id, note_text, created_at""",
+        campaign_id.strip(), note_text,
+    )
+    return {"id": row["id"], "campaign_id": row["campaign_id"],
+            "note_text": row["note_text"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None}
+
+
+async def list_campaign_notes(pool: asyncpg.Pool, campaign_id: str) -> list:
+    rows = await pool.fetch(
+        """SELECT id, note_text, created_at FROM campaign_notes
+             WHERE campaign_id=$1 ORDER BY created_at""",
+        campaign_id.strip(),
+    )
+    return [
+        {"id": r["id"], "note_text": r["note_text"],
+         "created_at": r["created_at"].isoformat() if r["created_at"] else None}
+        for r in rows
+    ]
+
+
+async def get_campaign_note_texts(pool: asyncpg.Pool, campaign_id: str) -> list:
+    """Return just the note strings for a campaign (for synthesis)."""
+    rows = await pool.fetch(
+        "SELECT note_text FROM campaign_notes WHERE campaign_id=$1 ORDER BY created_at",
+        campaign_id.strip(),
+    )
+    return [r["note_text"] for r in rows]
+
+
+async def delete_campaign_note(pool: asyncpg.Pool, note_id: int) -> None:
+    await pool.execute("DELETE FROM campaign_notes WHERE id=$1", note_id)
+
+
+async def count_campaign_notes(pool: asyncpg.Pool) -> dict:
+    """Return {campaign_id: note_count} for surfacing counts in the UI list."""
+    rows = await pool.fetch(
+        "SELECT campaign_id, COUNT(*) AS n FROM campaign_notes GROUP BY campaign_id"
+    )
+    return {r["campaign_id"]: r["n"] for r in rows}
 
 
 async def add_instantly_campaign(pool: asyncpg.Pool, label: str, campaign_id: str) -> dict:
