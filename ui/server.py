@@ -536,6 +536,16 @@ def _lead_vertical(lead: dict) -> str:
     return _SEGMENT_TO_VERTICAL.get(industry, "ai_generic")
 
 
+_GREETING_RE = re.compile(r"^\s*(hi|hey|hello|dear)\b[^\n]*\n+", re.IGNORECASE)
+
+
+def _strip_greeting(body: str) -> str:
+    """Remove a leading greeting line (e.g. 'Hi John,') so the Instantly sequence
+    can own the greeting and slot {{pain_point}} between greeting and pitch.
+    Only strips when the first line is clearly a greeting; otherwise returns as-is."""
+    return _GREETING_RE.sub("", body or "", count=1).lstrip()
+
+
 def _resolve_instantly_campaign(lead: dict, routing_map: dict) -> str:
     """Pick the Instantly campaign for a lead.
 
@@ -671,7 +681,10 @@ async def _send_to_instantly(leads: list, campaign_id: str = "") -> list:
                 "last_name":       parts[1] if len(parts) > 1 else "",
                 "company_name":    lead.get("company") or "",
                 "website":         lead.get("company_website") or "",
-                "personalization": built["body"],
+                # Greeting is owned by the Instantly sequence ("Hi {{firstName}},"),
+                # so personalization is the pitch only — lets {{pain_point}} sit
+                # between the greeting and the pitch without doubling the "Hi".
+                "personalization": _strip_greeting(built["body"]),
                 # Custom variables referenced in the Instantly sequence:
                 #   {{email_subject}} — Cortex per-vertical subject
                 #   {{pain_point}}    — campaign meeting-note pain point (empty if unset)

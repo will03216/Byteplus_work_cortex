@@ -374,6 +374,9 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .routing-group-head { display:flex; justify-content:space-between; align-items:center; padding:8px 0 5px; margin-top:6px; font-size:13px; font-weight:600; border-top:1px solid var(--border); }
 .routing-group-head:first-of-type { border-top:none; margin-top:0; }
 .routing-group-head span:last-child { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; font-weight:400; }
+.routing-pain { padding:2px 0 4px 14px; font-size:12px; color:var(--text2); line-height:1.45; }
+.routing-pain-label { color:var(--blue); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; }
+.routing-pain-none { color:var(--text3); font-style:italic; }
 .routing-lead-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0 3px 14px; font-size:12px; }
 .routing-lead-name { color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .routing-vertical { color:var(--text3); font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace; font-size:11px; background:var(--bg3); padding:1px 7px; border-radius:4px; white-space:nowrap; margin-left:8px; }
@@ -2753,6 +2756,11 @@ function verticalLabel(key) {
   return v ? v.label : (key || '—');
 }
 
+function campaignPainPoint(cid) {
+  const c = _savedCampaigns.find(x => x.campaign_id === cid);
+  return (c && (c.pain_point || '').trim()) ? c.pain_point.trim() : '';
+}
+
 let _routingExpanded = false;
 function toggleRoutingSummary() {
   _routingExpanded = !_routingExpanded;
@@ -2782,6 +2790,10 @@ function renderRoutingSummary(leads) {
 
   Object.entries(groups).forEach(([cid, ls]) => {
     html += `<div class="routing-group-head"><span>${campaignLabel(cid)}</span><span>${ls.length} lead${ls.length !== 1 ? 's' : ''}</span></div>`;
+    const pp = campaignPainPoint(cid);
+    html += `<div class="routing-pain">${pp
+      ? '<span class="routing-pain-label">hook:</span> ' + pp
+      : '<span class="routing-pain-none">(no pain point set)</span>'}</div>`;
     if (_routingExpanded) {
       ls.forEach(l => {
         html += `<div class="routing-lead-row">
