@@ -893,14 +893,20 @@ async def _run_job(run_id: str, csv_path: str, run_dir: Path, concurrency: int, 
 
         rc = proc.returncode
         _jobs[run_id]["returncode"] = rc
-        _jobs[run_id]["status"]     = "done" if rc == 0 else "error"
 
-        # Import results into PostgreSQL, then clean up temp files
-        if _pool:
+        # Import to PostgreSQL BEFORE signalling "done", so the client fetches the
+        # complete lead set in one go (was: done fired mid-import → partial results).
+        if _pool and rc == 0:
+            _jobs[run_id]["lines"].append("✓ Scoring complete — importing results to database…")
             await _import_to_db(run_id, run_dir, rc, campaign_id=campaign_id)
+        elif _pool:
+            await store.update_run(_pool, run_id, "error", returncode=rc)
         # Remove temp run directory — data is now in DB (or kept if no DB)
         if _pool and run_dir.exists():
             shutil.rmtree(run_dir, ignore_errors=True)
+
+        # Now everything is persisted — signal completion
+        _jobs[run_id]["status"] = "done" if rc == 0 else "error"
 
     except Exception as exc:
         _jobs[run_id]["lines"].append(f"ERROR: {exc}")
